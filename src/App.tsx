@@ -323,27 +323,12 @@ export default function App() {
     setAuthLoading(true);
 
     try {
-      if (authMode === "register") {
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        await updateProfile(userCredential.user, { displayName: displayName || email.split("@")[0] });
-        
-        const userRef = doc(db, "users", userCredential.user.uid);
-        await setDoc(userRef, {
-          email: email,
-          displayName: displayName || email.split("@")[0],
-          role: "user",
-          createdAt: serverTimestamp(),
-        });
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
+      await signInWithEmailAndPassword(auth, email, password);
       setShowAuthModal(false);
     } catch (err: any) {
       console.error("Auth error:", err);
       let message = "Une erreur est survenue.";
-      if (err.code === "auth/email-already-in-use") message = "Cet email est déjà utilisé.";
       if (err.code === "auth/invalid-credential") message = "Identifiants invalides.";
-      if (err.code === "auth/weak-password") message = "Mot de passe trop faible.";
       if (err.code === "auth/user-not-found") message = "Utilisateur non trouvé.";
       if (err.code === "auth/wrong-password") message = "Mot de passe incorrect.";
       setAuthError(message);
@@ -1006,7 +991,7 @@ export default function App() {
                   <Lock size={24} />
                 </div>
                 <h2 className="text-3xl font-bold tracking-tighter">
-                  {authMode === "login" ? "Connexion" : "Inscription"}
+                  Connexion
                 </h2>
                 <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest">
                   Espace Administration FGSESMUN
@@ -1014,18 +999,6 @@ export default function App() {
               </div>
 
               <form onSubmit={handleAuth} className="space-y-6">
-                {authMode === "register" && (
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Nom</label>
-                    <input 
-                      type="text"
-                      required
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      className="w-full px-4 py-3 bg-zinc-50 border border-zinc-100 rounded-lg outline-none focus:border-zinc-900 transition-colors"
-                    />
-                  </div>
-                )}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Email</label>
                   <input 
@@ -1058,18 +1031,9 @@ export default function App() {
                   disabled={authLoading}
                   className="w-full py-4 bg-primary text-white text-[11px] font-bold uppercase tracking-[0.3em] rounded-lg hover:bg-opacity-90 transition-colors flex items-center justify-center gap-2"
                 >
-                  {authLoading ? <Loader2 size={16} className="animate-spin" /> : (authMode === "login" ? "Accéder" : "S'inscrire")}
+                  {authLoading ? <Loader2 size={16} className="animate-spin" /> : "Accéder"}
                 </button>
               </form>
-
-              <div className="mt-8 text-center">
-                <button 
-                  onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}
-                  className="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-zinc-900 transition-colors underline underline-offset-4"
-                >
-                  {authMode === "login" ? "Pas de compte ?" : "Déjà un compte ?"}
-                </button>
-              </div>
             </motion.div>
           </div>
         )}
