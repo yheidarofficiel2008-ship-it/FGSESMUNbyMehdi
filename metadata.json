@@ -1,0 +1,8 @@
+{
+  "name": "FGSESMUN 2026",
+  "description": "Plateforme de gestion pour le projet FGSESMUN 2026, avec authentification sécurisée et base de données Firestore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "userProfile": {
+      "title": "User Profile",
+      "description": "Additional public data for users",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "role": { "type": "string" }
+      },
+      "required": ["email"]
+    },
+    "programSection": {
+      "title": "Program Section",
+      "description": "A section of the electoral program",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "description"]
+    },
+    "conference": {
+      "title": "Conference",
+      "description": "A conference entry",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "description", "logoUrl"]
+    },
+    "teamMember": {
+      "title": "Team Member",
+      "description": "A member of the campaign team",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "description": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "contact": { "type": "string" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "role", "photoUrl", "contact", "order"]
+    },
+    "homepageBlock": {
+      "title": "Homepage Block",
+      "description": "A block of text content on the homepage",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "signature": { "type": "string" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "description", "order"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "userProfile",
+      "description": "User profiles"
+    },
+    "program/{sectionId}": {
+      "schema": "programSection",
+      "description": "Electoral program sections"
+    },
+    "conferences/{conferenceId}": {
+      "schema": "conference",
+      "description": "Campaign conferences"
+    },
+    "team/{memberId}": {
+      "schema": "teamMember",
+      "description": "Team members"
+    },
+    "homepageBlocks/{blockId}": {
+      "schema": "homepageBlock",
+      "description": "Homepage content blocks"
+    }
+  }
+}
