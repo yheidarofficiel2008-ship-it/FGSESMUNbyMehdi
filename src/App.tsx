@@ -123,6 +123,30 @@ interface HomepageBlock {
   createdAt: any;
 }
 
+function ExpandableText({ text, limit = 150, className = "" }: { text: string; limit?: number; className?: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const shouldTruncate = text.length > limit;
+
+  if (!shouldTruncate) return <p className={className}>{text}</p>;
+
+  return (
+    <div className={className}>
+      <p className="inline">
+        {isExpanded ? text : `${text.substring(0, limit)}... `}
+      </p>
+      <button 
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsExpanded(!isExpanded);
+        }}
+        className="text-primary font-bold hover:underline ml-1 inline-block"
+      >
+        {isExpanded ? "Voir moins" : "Lire plus"}
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -591,9 +615,11 @@ export default function App() {
                                   </button>
                                 )}
                               </div>
-                              <p className="text-zinc-500 text-sm leading-relaxed font-serif italic line-clamp-3 mb-6">
-                                {block.description}
-                              </p>
+                              <ExpandableText 
+                                text={block.description} 
+                                limit={120} 
+                                className="text-zinc-500 text-sm leading-relaxed font-serif italic mb-6"
+                              />
                               <div className="mt-auto flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary">
                                 Lire la suite <ArrowRight size={12} className="group-hover:translate-x-1 transition-transform" />
                               </div>
@@ -670,7 +696,11 @@ export default function App() {
                                   </button>
                                 )}
                               </div>
-                              <p className="text-zinc-600 leading-relaxed font-serif text-lg whitespace-pre-wrap">{section.description}</p>
+                              <ExpandableText 
+                                text={section.description} 
+                                limit={300} 
+                                className="text-zinc-600 leading-relaxed font-serif text-lg whitespace-pre-wrap"
+                              />
                             </div>
                           </div>
                         ))
@@ -729,7 +759,11 @@ export default function App() {
                               />
                             </div>
                             <h3 className="text-2xl font-bold tracking-tight text-primary transition-all group-hover:text-zinc-900">{conf.title}</h3>
-                            <p className="text-sm text-zinc-500 font-serif italic line-clamp-4 leading-relaxed">{conf.description}</p>
+                            <ExpandableText 
+                              text={conf.description} 
+                              limit={150} 
+                              className="text-sm text-zinc-500 font-serif italic leading-relaxed"
+                            />
                           </div>
                           {user && (
                             <button onClick={() => handleDeleteItem("conferences", conf.id)} className="absolute top-6 right-6 text-zinc-300 hover:text-red-500 transition-colors">
@@ -793,7 +827,11 @@ export default function App() {
                           <h4 className="text-xl font-bold tracking-tight mb-2 text-primary">{member.name}</h4>
                           <p className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-6 bg-primary/5 inline-block px-4 py-1.5 rounded-full">{member.role}</p>
                           {member.description && (
-                            <p className="text-sm text-zinc-500 font-serif italic mb-6 line-clamp-3 leading-relaxed">{member.description}</p>
+                            <ExpandableText 
+                              text={member.description} 
+                              limit={100} 
+                              className="text-sm text-zinc-500 font-serif italic mb-6 leading-relaxed"
+                            />
                           )}
                           <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400 border-t border-zinc-50 pt-6 cursor-default group-hover:text-primary transition-colors">
                             {member.contact}
