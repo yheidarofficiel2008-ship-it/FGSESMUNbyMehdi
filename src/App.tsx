@@ -361,7 +361,7 @@ export default function App() {
   const tabs = [
     { id: "home", label: "Accueil", icon: <Home size={22} /> },
     { id: "programme", label: "Programme", icon: <Calendar size={22} /> },
-    { id: "conferences", label: "Conférences", icon: <Mic2 size={22} /> },
+    { id: "conferences", label: "Nos Conférences", icon: <Mic2 size={22} /> },
     { id: "equipe", label: "Équipe", icon: <Users size={22} /> },
   ];
 
@@ -698,7 +698,7 @@ export default function App() {
                   <div className="space-y-16">
                     <header className="flex flex-col md:flex-row justify-between items-center md:items-end gap-6">
                       <div className="text-center md:text-left">
-                        <h2 className="text-4xl md:text-6xl font-black tracking-tighter uppercase text-primary">Les Conférences</h2>
+                        <h2 className="text-4xl md:text-6xl font-black tracking-tighter uppercase text-primary">Nos Conférences</h2>
                       </div>
                       {user && (
                         <button 
