@@ -50,6 +50,24 @@ service cloud.firestore {
       allow write: if isSignedIn();
     }
     
+    // Supporters (Public Create with strict validations, Admin read/delete)
+    match /supporters/{id} {
+      allow create: if request.resource.data.keys().hasAll(['fullName', 'academicLevel', 'fieldOfStudy', 'phone', 'email', 'createdAt'])
+        && request.resource.data.keys().size() == 6
+        && request.resource.data.fullName is string
+        && request.resource.data.fullName.size() <= 100
+        && request.resource.data.academicLevel is string
+        && request.resource.data.academicLevel.size() <= 50
+        && request.resource.data.fieldOfStudy is string
+        && request.resource.data.fieldOfStudy.size() <= 100
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() <= 30
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 100
+        && request.resource.data.createdAt == request.time;
+      allow read, delete: if isSignedIn();
+    }
+    
     // Health check
     match /system/health {
       allow read: if true;

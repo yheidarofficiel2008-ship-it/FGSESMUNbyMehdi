@@ -66,6 +66,20 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["title", "description", "order"]
+    },
+    "supporter": {
+      "title": "Supporter",
+      "description": "A campaign supporter registration",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "academicLevel": { "type": "string" },
+        "fieldOfStudy": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fullName", "academicLevel", "fieldOfStudy", "phone", "email", "createdAt"]
     }
   },
   "firestore": {
@@ -88,6 +102,10 @@
     "homepageBlocks/{blockId}": {
       "schema": "homepageBlock",
       "description": "Homepage content blocks"
+    },
+    "supporters/{supporterId}": {
+      "schema": "supporter",
+      "description": "Supporter registration records"
     }
   }
 }

@@ -22,7 +22,10 @@ import {
   Mic2,
   Info,
   ChevronRight,
-  Globe
+  Globe,
+  Heart,
+  Trash2,
+  FileSpreadsheet
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -163,6 +166,19 @@ export default function App() {
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [homepageBlocks, setHomepageBlocks] = useState<HomepageBlock[]>([]);
   
+  // Supporters State
+  const [supportersList, setSupportersList] = useState<any[]>([]);
+  const [showSupporterModal, setShowSupporterModal] = useState(false);
+  const [supporterForm, setSupporterForm] = useState({
+    fullName: "",
+    academicLevel: "",
+    fieldOfStudy: "",
+    phone: "",
+    email: ""
+  });
+  const [supporterSubmitting, setSupporterSubmitting] = useState(false);
+  const [supporterSuccess, setSupporterSuccess] = useState(false);
+  
   // Admin Form State
   const [showAddForm, setShowAddForm] = useState<"none" | "program" | "conference" | "team" | "homepage">("none");
   const [formLoading, setFormLoading] = useState(false);
@@ -246,6 +262,26 @@ export default function App() {
       unsubHome();
     };
   }, []);
+
+  // Fetch Supporters list (Admin only)
+  useEffect(() => {
+    if (!user) {
+      setSupportersList([]);
+      return;
+    }
+
+    const qSupporters = query(collection(db, "supporters"));
+    const unsubSupporters = onSnapshot(qSupporters, (snapshot) => {
+      const sups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setSupportersList(sups.sort((a: any, b: any) => {
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeB - timeA;
+      }));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "supporters"));
+
+    return () => unsubSupporters();
+  }, [user]);
 
   const handleAddItem = async (e: FormEvent) => {
     e.preventDefault();
@@ -345,6 +381,59 @@ export default function App() {
     }
   };
 
+  const handleSaveSupporter = async (e: FormEvent) => {
+    e.preventDefault();
+    setSupporterSubmitting(true);
+    try {
+      const payload = {
+        fullName: supporterForm.fullName.trim(),
+        academicLevel: supporterForm.academicLevel,
+        fieldOfStudy: supporterForm.fieldOfStudy,
+        phone: supporterForm.phone.trim(),
+        email: supporterForm.email.trim(),
+        createdAt: serverTimestamp()
+      };
+      
+      await addDoc(collection(db, "supporters"), payload);
+      setSupporterSuccess(true);
+      setSupporterForm({
+        fullName: "",
+        academicLevel: "",
+        fieldOfStudy: "",
+        phone: "",
+        email: ""
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "supporters");
+    } finally {
+      setSupporterSubmitting(false);
+    }
+  };
+
+  const exportSupporterToCSV = () => {
+    const BOM = "\uFEFF";
+    const headers = ["Nom complet", "Niveau universitaire", "Filière", "Numéro", "Email", "Date d'inscription"];
+    
+    const rows = supportersList.map(sup => [
+      sup.fullName || "",
+      sup.academicLevel || "",
+      sup.fieldOfStudy || "",
+      sup.phone || "",
+      sup.email || "",
+      sup.createdAt ? new Date(sup.createdAt.seconds * 1000).toLocaleString("fr-FR") : ""
+    ]);
+
+    const csvContent = BOM + [headers.join(";"), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(";"))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `soutiens_fgsesmun_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center">
@@ -363,6 +452,11 @@ export default function App() {
     { id: "programme", label: "Programme", icon: <Calendar size={22} /> },
     { id: "conferences", label: "Nos Conférences", icon: <Mic2 size={22} /> },
     { id: "equipe", label: "Équipe", icon: <Users size={22} /> },
+  ];
+
+  const activeTabs = [
+    ...tabs,
+    ...(user ? [{ id: "supporters", label: "Soutiens", icon: <Heart size={22} /> }] : [])
   ];
 
   return (
@@ -390,9 +484,24 @@ export default function App() {
                 fallback.className = 'font-black tracking-tighter text-xl text-primary';
                 fallback.innerText = 'FGSESMUN';
                 parent.appendChild(fallback);
+                parent.style.display = 'block';
               }
             }}
           />
+        </div>
+
+        {/* Public Soutien Button always visible at the right */}
+        <div className="ml-auto">
+          <button 
+            onClick={() => {
+              setSupporterSuccess(false);
+              setShowSupporterModal(true);
+            }}
+            className="px-4 py-2 bg-primary hover:bg-opacity-90 text-white text-[11px] font-bold uppercase tracking-widest rounded-full transition-all flex items-center gap-1.5 shadow-sm hover:scale-105"
+          >
+            <Heart size={14} className="fill-current text-white" />
+            <span>Je soutiens</span>
+          </button>
         </div>
       </header>
 
@@ -425,7 +534,7 @@ export default function App() {
 
           <div className="flex flex-col h-full py-6">
             <nav className="flex-1 px-4 space-y-1">
-              {tabs.map((tab) => (
+              {activeTabs.map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => {
@@ -524,17 +633,30 @@ export default function App() {
                         </p>
                       </div>
                       
-                      {user && (
+                      <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-2">
                         <button 
                           onClick={() => {
-                            setFormData({});
-                            setShowAddForm("homepage");
+                            setSupporterSuccess(false);
+                            setShowSupporterModal(true);
                           }}
-                          className="px-6 py-3 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-full hover:bg-opacity-90 transition-colors mx-auto flex items-center gap-2"
+                          className="px-8 py-4 bg-primary text-white text-[12px] font-bold uppercase tracking-[0.2em] rounded-full hover:bg-opacity-90 hover:scale-105 transition-all flex items-center gap-2 shadow-lg shadow-primary/20"
                         >
-                          <Plus size={14} /> Nouvel Article
+                          <Heart size={16} className="fill-current text-white animate-pulse" />
+                          Je soutiens la campagne
                         </button>
-                      )}
+
+                        {user && (
+                          <button 
+                            onClick={() => {
+                              setFormData({});
+                              setShowAddForm("homepage");
+                            }}
+                            className="px-8 py-4 bg-zinc-950 text-white text-[12px] font-bold uppercase tracking-[0.15em] rounded-full hover:bg-opacity-90 transition-all flex items-center gap-2"
+                          >
+                            <Plus size={16} /> Nouvel Article
+                          </button>
+                        )}
+                      </div>
                     </header>
 
                     <div className="w-24 h-1 bg-primary/10 mx-auto rounded-full" />
@@ -831,6 +953,85 @@ export default function App() {
                     </div>
                   </div>
                 )}
+
+                {activeTab === "supporters" && user && (
+                  <div className="space-y-16 animate-fade-in">
+                    <header className="flex flex-col md:flex-row justify-between items-center md:items-end gap-6 text-center md:text-left">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-[0.4em] text-zinc-300 block mb-4 italic">Backoffice // 2026</span>
+                        <h2 className="text-4xl md:text-6xl font-black tracking-tighter uppercase text-primary">Liste des soutiens</h2>
+                        <p className="text-zinc-400 text-xs mt-2 font-bold uppercase tracking-widest">{supportersList.length} personnes soutiennent activement votre campagne</p>
+                      </div>
+                      
+                      {supportersList.length > 0 && (
+                        <button 
+                          onClick={exportSupporterToCSV}
+                          className="px-6 py-3 bg-zinc-900 text-white text-[10.5px] font-bold uppercase tracking-widest rounded-full flex items-center gap-2 hover:bg-zinc-850 hover:scale-[1.02] transition-all"
+                        >
+                          <FileSpreadsheet size={16} />
+                          Exporter vers Google Sheets (CSV)
+                        </button>
+                      )}
+                    </header>
+
+                    {supportersList.length === 0 ? (
+                      <div className="bg-white p-16 text-center rounded-2xl border border-zinc-100 italic font-serif text-zinc-400">
+                        Aucun soutien enregistré pour le moment.
+                      </div>
+                    ) : (
+                      <div className="bg-white rounded-3xl border border-zinc-100 shadow-sm overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse">
+                            <thead>
+                              <tr className="bg-zinc-50/50 border-b border-zinc-100 text-[10px] uppercase tracking-wider text-zinc-400 font-bold">
+                                <th className="p-6">Nom complet</th>
+                                <th className="p-6">Niveau Univ.</th>
+                                <th className="p-6">Filière</th>
+                                <th className="p-6">Numéro</th>
+                                <th className="p-6">Email</th>
+                                <th className="p-6">Date</th>
+                                <th className="p-6 text-right">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-zinc-50 text-[13px] text-zinc-650">
+                              {supportersList.map((sup) => (
+                                <tr key={sup.id} className="hover:bg-zinc-50/20 transition-colors">
+                                  <td className="p-6 font-bold text-zinc-900">{sup.fullName}</td>
+                                  <td className="p-6">{sup.academicLevel}</td>
+                                  <td className="p-6">
+                                    <span className="px-2.5 py-1.5 bg-primary/5 text-primary text-[10px] font-black uppercase tracking-wider rounded-full">
+                                      {sup.fieldOfStudy}
+                                    </span>
+                                  </td>
+                                  <td className="p-6 font-mono text-xs">{sup.phone}</td>
+                                  <td className="p-6">{sup.email}</td>
+                                  <td className="p-6 text-zinc-400 text-xs">
+                                    {sup.createdAt ? new Date(sup.createdAt.seconds * 1000).toLocaleDateString("fr-FR", {
+                                      day: "numeric",
+                                      month: "short",
+                                      year: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit"
+                                    }) : "-"}
+                                  </td>
+                                  <td className="p-6 text-right">
+                                    <button
+                                      onClick={() => handleDeleteItem("supporters", sup.id)}
+                                      className="p-2 text-zinc-300 hover:text-red-500 hover:bg-red-50/50 rounded-lg transition-all"
+                                      title="Supprimer ce soutien"
+                                    >
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </motion.div>
             </AnimatePresence>
           </div>
@@ -1034,6 +1235,146 @@ export default function App() {
                   {authLoading ? <Loader2 size={16} className="animate-spin" /> : "Accéder"}
                 </button>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showSupporterModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSupporterModal(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 30 }}
+              className="relative w-full max-w-md bg-white border border-zinc-100 shadow-2xl p-10 rounded-3xl z-10 max-h-[90vh] overflow-y-auto"
+            >
+              <button 
+                onClick={() => setShowSupporterModal(false)}
+                className="absolute top-6 right-6 text-zinc-400 hover:text-zinc-900 transition-colors p-2 rounded-full hover:bg-zinc-50"
+              >
+                <X size={20} />
+              </button>
+
+              {supporterSuccess ? (
+                <div className="text-center py-10 space-y-6">
+                  <div className="w-16 h-16 bg-green-50 text-green-500 rounded-full flex items-center justify-center mx-auto shadow-sm">
+                    <CheckCircle2 size={36} className="stroke-[2.5]" />
+                  </div>
+                  <div className="space-y-2">
+                    <h3 className="text-3xl font-black tracking-tighter text-zinc-950">Merci infiniment !</h3>
+                    <p className="text-sm font-medium text-zinc-500 max-w-xs mx-auto leading-relaxed">
+                      Votre soutien à la campagne FGSESMUN a été enregistré avec succès. Ensemble vers la victoire !
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowSupporterModal(false);
+                      setSupporterSuccess(false);
+                    }}
+                    className="px-8 py-3.5 bg-zinc-900 text-white text-[11px] font-bold uppercase tracking-widest rounded-xl hover:bg-zinc-800 transition-colors shadow-sm"
+                  >
+                    Fermer
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="text-center space-y-3">
+                    <div className="w-12 h-12 bg-primary/5 text-primary rounded-full flex items-center justify-center mx-auto">
+                      <Heart size={24} className="fill-current text-primary animate-pulse" />
+                    </div>
+                    <div>
+                      <h2 className="text-3xl font-black tracking-tighter text-zinc-950">Je soutiens</h2>
+                      <p className="text-zinc-400 text-[9px] font-bold uppercase tracking-widest mt-1">
+                        Rejoignez la campagne de Mehdi Loubani
+                      </p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleSaveSupporter} className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 block">Nom complet</label>
+                      <input 
+                        type="text"
+                        required
+                        placeholder="Mehdi Loubani"
+                        value={supporterForm.fullName}
+                        onChange={(e) => setSupporterForm({...supporterForm, fullName: e.target.value})}
+                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-100 rounded-lg outline-none focus:border-primary transition-colors text-sm"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 block">Niveau universitaire</label>
+                      <input 
+                        type="text"
+                        required
+                        placeholder="ex: L3, Master 1, ..."
+                        value={supporterForm.academicLevel}
+                        onChange={(e) => setSupporterForm({...supporterForm, academicLevel: e.target.value})}
+                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-100 rounded-lg outline-none focus:border-primary transition-colors text-sm"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 block">Filière</label>
+                      <select 
+                        required
+                        value={supporterForm.fieldOfStudy}
+                        onChange={(e) => setSupporterForm({...supporterForm, fieldOfStudy: e.target.value})}
+                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-100 rounded-lg outline-none focus:border-primary transition-colors text-sm"
+                      >
+                        <option value="" disabled>Sélectionner votre filière</option>
+                        <option value="Tronc Commun">Tronc Commun</option>
+                        <option value="Économie">Économie</option>
+                        <option value="Droit">Droit</option>
+                        <option value="Relations Internationales">Relations Internationales</option>
+                        <option value="Sciences Politiques">Sciences Politiques</option>
+                        <option value="Sciences Comportementales">Sciences Comportementales</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 block">Numéro de téléphone</label>
+                      <input 
+                        type="tel"
+                        required
+                        placeholder="ex: +212 600-000000"
+                        value={supporterForm.phone}
+                        onChange={(e) => setSupporterForm({...supporterForm, phone: e.target.value})}
+                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-100 rounded-lg outline-none focus:border-primary transition-colors text-sm"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 block">Adresse Mail</label>
+                      <input 
+                        type="email"
+                        required
+                        placeholder="exemple@fgses-um6p.ma"
+                        value={supporterForm.email}
+                        onChange={(e) => setSupporterForm({...supporterForm, email: e.target.value})}
+                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-100 rounded-lg outline-none focus:border-primary transition-colors text-sm"
+                      />
+                    </div>
+
+                    <button 
+                      type="submit"
+                      disabled={supporterSubmitting}
+                      className="w-full mt-2 py-4 bg-primary text-white text-[10px] font-bold uppercase tracking-[0.25em] rounded-xl hover:bg-opacity-90 transition-colors flex items-center justify-center gap-2 shadow-md shadow-primary/10 disabled:opacity-50"
+                    >
+                      {supporterSubmitting ? <Loader2 size={16} className="animate-spin" /> : "Envoyer mon soutien"}
+                    </button>
+                  </form>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
