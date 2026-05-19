@@ -169,6 +169,13 @@ export default function App() {
   // Supporters State
   const [supportersList, setSupportersList] = useState<any[]>([]);
   const [showSupporterModal, setShowSupporterModal] = useState(false);
+  const [showPromoModal, setShowPromoModal] = useState(() => {
+    try {
+      return !sessionStorage.getItem("fgsesmun_welcome_promo_dismissed2");
+    } catch {
+      return true;
+    }
+  });
   const [supporterForm, setSupporterForm] = useState({
     fullName: "",
     academicLevel: "",
@@ -633,19 +640,8 @@ export default function App() {
                         </p>
                       </div>
                       
-                      <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-2">
-                        <button 
-                          onClick={() => {
-                            setSupporterSuccess(false);
-                            setShowSupporterModal(true);
-                          }}
-                          className="px-8 py-4 bg-primary text-white text-[12px] font-bold uppercase tracking-[0.2em] rounded-full hover:bg-opacity-90 hover:scale-105 transition-all flex items-center gap-2 shadow-lg shadow-primary/20"
-                        >
-                          <Heart size={16} className="fill-current text-white animate-pulse" />
-                          Je soutiens la campagne
-                        </button>
-
-                        {user && (
+                      {user && (
+                        <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-2">
                           <button 
                             onClick={() => {
                               setFormData({});
@@ -655,8 +651,8 @@ export default function App() {
                           >
                             <Plus size={16} /> Nouvel Article
                           </button>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </header>
 
                     <div className="w-24 h-1 bg-primary/10 mx-auto rounded-full" />
@@ -1375,6 +1371,83 @@ export default function App() {
                   </form>
                 </div>
               )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showPromoModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setShowPromoModal(false);
+                try { sessionStorage.setItem("fgsesmun_welcome_promo_dismissed2", "true"); } catch {}
+              }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 40 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 40 }}
+              transition={{ type: "spring", damping: 25, stiffness: 180 }}
+              className="relative w-full max-w-lg bg-white border border-zinc-100 shadow-2xl p-10 md:p-12 rounded-3xl z-10 text-center space-y-8"
+            >
+              <button 
+                onClick={() => {
+                  setShowPromoModal(false);
+                  try { sessionStorage.setItem("fgsesmun_welcome_promo_dismissed2", "true"); } catch {}
+                }}
+                className="absolute top-6 right-6 text-zinc-400 hover:text-zinc-900 transition-colors p-2 rounded-full hover:bg-zinc-50 animate-fade-in-delayed"
+                title="Passer"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="space-y-4">
+                <div className="w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mx-auto shadow-inner">
+                  <Heart size={32} className="fill-current text-primary animate-pulse" />
+                </div>
+                <div className="space-y-2">
+                  <span className="text-[10px] font-black text-primary uppercase tracking-[0.3em] bg-primary/5 px-4 py-1.5 rounded-full inline-block">
+                    URGENT // ACTION CITOYENNE
+                  </span>
+                  <h2 className="text-4xl font-black tracking-tighter text-zinc-950">
+                    Soutenez FGSESMUN !
+                  </h2>
+                  <p className="text-zinc-500 font-serif italic text-base leading-relaxed max-w-md mx-auto">
+                    "Votre voix est l'énergie de notre campagne. Ensemble, concevons un avenir brillant et uni pour la Simulation des Nations Unies."
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <button 
+                  onClick={() => {
+                    setShowPromoModal(false);
+                    try { sessionStorage.setItem("fgsesmun_welcome_promo_dismissed2", "true"); } catch {}
+                    setSupporterSuccess(false);
+                    setShowSupporterModal(true);
+                  }}
+                  className="w-full py-4 bg-primary text-white text-[12px] font-bold uppercase tracking-[0.25em] rounded-2xl hover:bg-opacity-95 hover:scale-[1.02] transition-all flex items-center justify-center gap-2.5 shadow-lg shadow-primary/20"
+                >
+                  <Heart size={16} className="fill-current text-white animate-pulse" />
+                  Je soutiens la campagne
+                </button>
+                
+                <button 
+                  onClick={() => {
+                    setShowPromoModal(false);
+                    try { sessionStorage.setItem("fgsesmun_welcome_promo_dismissed2", "true"); } catch {}
+                  }}
+                  className="text-xs font-black uppercase tracking-widest text-zinc-400 hover:text-zinc-900 transition-colors py-2 block w-full text-center"
+                >
+                  Passer pour le moment
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
