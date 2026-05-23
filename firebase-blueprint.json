@@ -80,6 +80,26 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["fullName", "academicLevel", "fieldOfStudy", "phone", "email", "createdAt"]
+    },
+    "financeTransaction": {
+      "title": "Finance Transaction",
+      "description": "A treasury entry (income or expense) for the club",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["in", "out"] },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "responsible": { "type": "string" },
+        "date": { "type": "string" },
+        "attachmentUrl": { "type": "string" },
+        "priority": { "type": "string" },
+        "archived": { "type": "boolean" },
+        "notes": { "type": "string" },
+        "favorite": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "amount", "category", "description", "responsible", "date", "createdAt"]
     }
   },
   "firestore": {
@@ -106,6 +126,10 @@
     "supporters/{supporterId}": {
       "schema": "supporter",
       "description": "Supporter registration records"
+    },
+    "financeTransactions/{transactionId}": {
+      "schema": "financeTransaction",
+      "description": "Treasury/financial transactions for the club"
     }
   }
 }

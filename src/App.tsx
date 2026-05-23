@@ -19,13 +19,33 @@ import {
   CheckCircle2,
   Home,
   Calendar,
+  CalendarDays,
+  Pin,
   Mic2,
   Info,
   ChevronRight,
+  ChevronLeft,
   Globe,
   Heart,
   Trash2,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Wallet,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  ArrowUpRight,
+  ArrowDownRight,
+  Paperclip,
+  Star,
+  Archive,
+  Download,
+  AlertTriangle,
+  Sparkles,
+  Upload,
+  Activity,
+  FileText,
+  Target,
+  Briefcase
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -38,6 +58,19 @@ import {
   createUserWithEmailAndPassword,
   updateProfile
 } from "firebase/auth";
+import { 
+  ResponsiveContainer, 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  BarChart, 
+  Bar, 
+  Cell,
+  ReferenceLine
+} from "recharts";
 import { 
   doc, 
   getDoc, 
@@ -150,6 +183,32 @@ function ExpandableText({ text, limit = 150, className = "" }: { text: string; l
   );
 }
 
+const getLocalDateTimeString = () => {
+  const now = new Date();
+  const offset = now.getTimezoneOffset();
+  const localDate = new Date(now.getTime() - offset * 60 * 1000);
+  return localDate.toISOString().slice(0, 16);
+};
+
+const formatTransactionDate = (dateStr: string) => {
+  if (!dateStr) return "";
+  try {
+    const parts = dateStr.split("T");
+    const datePart = parts[0]; // YYYY-MM-DD
+    const ymd = datePart.split("-");
+    if (ymd.length === 3) {
+      const frenchDate = `${ymd[2]}/${ymd[1]}/${ymd[0]}`;
+      if (parts[1]) {
+        return `${frenchDate} à ${parts[1]}`;
+      }
+      return frenchDate;
+    }
+    return dateStr;
+  } catch {
+    return dateStr;
+  }
+};
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,6 +249,79 @@ export default function App() {
   const [showAddForm, setShowAddForm] = useState<"none" | "program" | "conference" | "team" | "homepage">("none");
   const [formLoading, setFormLoading] = useState(false);
   const [formData, setFormData] = useState<any>({});
+  
+  // Treasury State
+  const [financeTransactions, setFinanceTransactions] = useState<any[]>([]);
+  const [financeGoals, setFinanceGoals] = useState<any[]>([]);
+  const [showAddGoalModal, setShowAddGoalModal] = useState(false);
+  const [showEditGoalModal, setShowEditGoalModal] = useState<any>(null);
+  const [deleteConfirmGoalId, setDeleteConfirmGoalId] = useState<string | null>(null);
+  const [calendarYear, setCalendarYear] = useState<number>(2026);
+  const [calendarMonth, setCalendarMonth] = useState<number>(4); // 0-indexed, 4 = Mai
+  
+  // Agenda State
+  const [agendaEvents, setAgendaEvents] = useState<any[]>([]);
+  const [agendaNotes, setAgendaNotes] = useState<any[]>([]);
+  const [agendaYear, setAgendaYear] = useState<number>(2026);
+  const [agendaMonth, setAgendaMonth] = useState<number>(4); // Default to Mai (4)
+  const [showAddEventModalDate, setShowAddEventModalDate] = useState<string | null>(null);
+  const [showEventDetails, setShowEventDetails] = useState<any>(null);
+  const [isEditingEvent, setIsEditingEvent] = useState(false);
+  const [deleteConfirmEvent, setDeleteConfirmEvent] = useState(false);
+
+  // Reset modal states on change
+  useEffect(() => {
+    setIsEditingEvent(false);
+    setDeleteConfirmEvent(false);
+  }, [showEventDetails]);
+  const [eventForm, setEventForm] = useState({
+    title: "",
+    category: "Réunion", // Réunion, Conférence, Événement, Visite, Autre
+    importance: "Moyenne", // Haute, Moyenne, Basse
+    description: ""
+  });
+  const [newNoteText, setNewNoteText] = useState("");
+  const [newNoteColor, setNewNoteColor] = useState("yellow"); // yellow, blue, green, pink
+  
+  const [goalForm, setGoalForm] = useState({
+    title: "",
+    amount: "",
+    description: ""
+  });
+  const [showAddIncomeModal, setShowAddIncomeModal] = useState(false);
+  const [showAddExpenseModal, setShowAddExpenseModal] = useState(false);
+  const [incomeForm, setIncomeForm] = useState({
+    amount: "",
+    source: "",
+    category: "Sponsoring",
+    description: "",
+    date: getLocalDateTimeString(),
+    attachmentUrl: ""
+  });
+  const [expenseForm, setExpenseForm] = useState({
+    amount: "",
+    description: "",
+    category: "Événement",
+    responsible: "",
+    date: getLocalDateTimeString(),
+    attachmentUrl: "",
+    priority: "Moyenne"
+  });
+  const [financeSubmitting, setFinanceSubmitting] = useState(false);
+  const [financeSubTab, setFinanceSubTab] = useState<'overview' | 'ledger' | 'analytics' | 'docs' | 'goals'>('overview');
+  const [financeSearch, setFinanceSearch] = useState("");
+  const [financeTypeFilter, setFinanceTypeFilter] = useState("all");
+  const [financeCatFilter, setFinanceCatFilter] = useState("all");
+  const [financeSortBy, setFinanceSortBy] = useState("newest");
+  
+  // Internal notes state and notifications
+  const [internalNotes, setInternalNotes] = useState(() => {
+    try {
+      return localStorage.getItem("fgsesmun_finance_notes") || "";
+    } catch {
+      return "";
+    }
+  });
   
   // Auth Form State
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -288,6 +420,90 @@ export default function App() {
     }, (err) => handleFirestoreError(err, OperationType.LIST, "supporters"));
 
     return () => unsubSupporters();
+  }, [user]);
+
+  // Fetch Finance transactions (Admin only)
+  useEffect(() => {
+    if (!user) {
+      setFinanceTransactions([]);
+      return;
+    }
+
+    const qFinance = query(collection(db, "financeTransactions"));
+    const unsubFinance = onSnapshot(qFinance, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setFinanceTransactions(items.sort((a: any, b: any) => {
+        const strA = a.date ? (a.date.includes("T") ? a.date : `${a.date}T00:00`) : "1970-01-01T00:00";
+        const strB = b.date ? (b.date.includes("T") ? b.date : `${b.date}T00:00`) : "1970-01-01T00:00";
+        const dateA = new Date(strA).getTime();
+        const dateB = new Date(strB).getTime();
+        if (dateB !== dateA) return dateB - dateA;
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeB - timeA;
+      }));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "financeTransactions"));
+
+    return () => unsubFinance();
+  }, [user]);
+
+  // Fetch Finance goals (Admin only)
+  useEffect(() => {
+    if (!user) {
+      setFinanceGoals([]);
+      return;
+    }
+
+    const qGoals = query(collection(db, "financeGoals"));
+    const unsubGoals = onSnapshot(qGoals, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setFinanceGoals(items.sort((a: any, b: any) => {
+        const orderA = typeof a.order === 'number' ? a.order : 0;
+        const orderB = typeof b.order === 'number' ? b.order : 0;
+        if (orderA !== orderB) return orderA - orderB;
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeA - timeB;
+      }));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "financeGoals"));
+
+    return () => unsubGoals();
+  }, [user]);
+
+  // Fetch Agenda Events (Admin only)
+  useEffect(() => {
+    if (!user) {
+      setAgendaEvents([]);
+      return;
+    }
+
+    const qEvents = query(collection(db, "agendaEvents"));
+    const unsubEvents = onSnapshot(qEvents, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAgendaEvents(items);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "agendaEvents"));
+
+    return () => unsubEvents();
+  }, [user]);
+
+  // Fetch Agenda Notes (Admin only)
+  useEffect(() => {
+    if (!user) {
+      setAgendaNotes([]);
+      return;
+    }
+
+    const qNotes = query(collection(db, "agendaNotes"));
+    const unsubNotes = onSnapshot(qNotes, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAgendaNotes(items.sort((a: any, b: any) => {
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeB - timeA;
+      }));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "agendaNotes"));
+
+    return () => unsubNotes();
   }, [user]);
 
   const handleAddItem = async (e: FormEvent) => {
@@ -441,6 +657,273 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const handleSaveIncome = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const amt = parseFloat(incomeForm.amount) || 0;
+    if (amt <= 0) {
+      return;
+    }
+    setFinanceSubmitting(true);
+    try {
+      const payload = {
+        type: "in",
+        amount: amt,
+        category: incomeForm.category,
+        description: incomeForm.description.trim(),
+        responsible: incomeForm.source.trim(),
+        date: incomeForm.date,
+        attachmentUrl: incomeForm.attachmentUrl.trim(),
+        archived: false,
+        favorite: false,
+        createdAt: serverTimestamp()
+      };
+      await addDoc(collection(db, "financeTransactions"), payload);
+      setShowAddIncomeModal(false);
+      setIncomeForm({
+        amount: "",
+        source: "",
+        category: "Sponsoring",
+        description: "",
+        date: getLocalDateTimeString(),
+        attachmentUrl: ""
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "financeTransactions");
+    } finally {
+      setFinanceSubmitting(false);
+    }
+  };
+
+  const handleSaveExpense = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const amt = parseFloat(expenseForm.amount) || 0;
+    if (amt <= 0) {
+      return;
+    }
+    setFinanceSubmitting(true);
+    try {
+      const payload = {
+        type: "out",
+        amount: amt,
+        description: expenseForm.description.trim(),
+        category: expenseForm.category,
+        responsible: expenseForm.responsible.trim(),
+        date: expenseForm.date,
+        attachmentUrl: expenseForm.attachmentUrl.trim(),
+        priority: expenseForm.priority,
+        archived: false,
+        favorite: false,
+        createdAt: serverTimestamp()
+      };
+      await addDoc(collection(db, "financeTransactions"), payload);
+      setShowAddExpenseModal(false);
+      setExpenseForm({
+        amount: "",
+        description: "",
+        category: "Événement",
+        responsible: "",
+        date: getLocalDateTimeString(),
+        attachmentUrl: "",
+        priority: "Moyenne"
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "financeTransactions");
+    } finally {
+      setFinanceSubmitting(false);
+    }
+  };
+
+  const exportFinanceToCSV = () => {
+    const BOM = "\uFEFF";
+    const headers = ["Type", "Montant (DH)", "Catégorie", "Motif / Description", "Responsable / Source", "Date transaction", "Priorité", "Statut", "Pièce jointe / Facture"];
+    
+    const rows = financeTransactions.map(t => [
+      t.type === "in" ? "Entrée" : "Sortie",
+      t.amount || 0,
+      t.category || "",
+      t.description || "",
+      t.responsible || "",
+      t.date || "",
+      t.type === "out" ? (t.priority || "Moyenne") : "-",
+      t.archived ? "Archivé" : "Actif",
+      t.attachmentUrl || ""
+    ]);
+
+    const csvContent = BOM + [headers.join(";"), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(";"))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `compta_fgsesmun_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const toggleTransactionFavorite = async (id: string, current: boolean) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, "financeTransactions", id), { favorite: !current });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `financeTransactions/${id}`);
+    }
+  };
+
+  const toggleTransactionArchived = async (id: string, current: boolean) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, "financeTransactions", id), { archived: !current });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `financeTransactions/${id}`);
+    }
+  };
+
+  const handleSaveGoal = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const amountNum = parseFloat(goalForm.amount) || 0;
+    if (amountNum <= 0) return;
+    try {
+      await addDoc(collection(db, "financeGoals"), {
+        title: goalForm.title.trim(),
+        amount: amountNum,
+        description: goalForm.description.trim(),
+        createdAt: serverTimestamp(),
+        order: financeGoals.length > 0 ? Math.max(...financeGoals.map(g => g.order ?? 0)) + 1 : 0
+      });
+      setShowAddGoalModal(false);
+      setGoalForm({ title: "", amount: "", description: "" });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "financeGoals");
+    }
+  };
+
+  const handleUpdateGoal = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !showEditGoalModal) return;
+    const amountNum = parseFloat(goalForm.amount) || 0;
+    if (amountNum <= 0) return;
+    try {
+      await updateDoc(doc(db, "financeGoals", showEditGoalModal.id), {
+        title: goalForm.title.trim(),
+        amount: amountNum,
+        description: goalForm.description.trim()
+      });
+      setShowEditGoalModal(null);
+      setGoalForm({ title: "", amount: "", description: "" });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "financeGoals");
+    }
+  };
+
+  const handleDeleteGoal = async (id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, "financeGoals", id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `financeGoals/${id}`);
+    }
+  };
+
+  // Agenda CRUD Handlers
+  const handleAddAgendaEvent = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !showAddEventModalDate) return;
+    try {
+      await addDoc(collection(db, "agendaEvents"), {
+        title: eventForm.title.trim() || "Sans titre",
+        category: eventForm.category,
+        importance: eventForm.importance,
+        description: eventForm.description.trim(),
+        date: showAddEventModalDate, // preselected string "YYYY-MM-DD"
+        createdAt: serverTimestamp()
+      });
+      setShowAddEventModalDate(null);
+      setEventForm({
+        title: "",
+        category: "Réunion",
+        importance: "Moyenne",
+        description: ""
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "agendaEvents");
+    }
+  };
+
+  const handleDeleteAgendaEvent = async (id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, "agendaEvents", id));
+      setShowEventDetails(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `agendaEvents/${id}`);
+    }
+  };
+
+  const handleUpdateAgendaEvent = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !showEventDetails) return;
+    try {
+      await updateDoc(doc(db, "agendaEvents", showEventDetails.id), {
+        title: eventForm.title.trim() || "Sans titre",
+        category: eventForm.category,
+        importance: eventForm.importance,
+        description: eventForm.description.trim()
+      });
+      setShowEventDetails(null);
+      setEventForm({
+        title: "",
+        category: "Réunion",
+        importance: "Moyenne",
+        description: ""
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `agendaEvents/${showEventDetails.id}`);
+    }
+  };
+
+  const handleAddAgendaNote = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !newNoteText.trim()) return;
+    try {
+      await addDoc(collection(db, "agendaNotes"), {
+        text: newNoteText.trim(),
+        color: newNoteColor,
+        createdAt: serverTimestamp(),
+        dateStr: new Date().toLocaleDateString("fr-FR", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit"
+        })
+      });
+      setNewNoteText("");
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "agendaNotes");
+    }
+  };
+
+  const handleDeleteAgendaNote = async (id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, "agendaNotes", id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `agendaNotes/${id}`);
+    }
+  };
+
+  const handleUpdateInternalNotes = (text: string) => {
+    setInternalNotes(text);
+    try {
+      localStorage.setItem("fgsesmun_finance_notes", text);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center">
@@ -463,7 +946,11 @@ export default function App() {
 
   const activeTabs = [
     ...tabs,
-    ...(user ? [{ id: "supporters", label: "Soutiens", icon: <Heart size={22} /> }] : [])
+    ...(user ? [
+      { id: "supporters", label: "Soutiens", icon: <Heart size={22} /> },
+      { id: "tresorerie", label: "Trésorerie", icon: <Wallet size={22} /> },
+      { id: "agenda", label: "Agenda", icon: <CalendarDays size={22} /> }
+    ] : [])
   ];
 
   return (
@@ -1028,6 +1515,1629 @@ export default function App() {
                     )}
                   </div>
                 )}
+
+                {activeTab === "tresorerie" && user && (
+                  <div className="space-y-12 animate-fade-in pb-16">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-2 border-b border-zinc-100">
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-[0.4em] text-primary/80 block mb-2 font-mono">SYSTEME DE TRESORERIE // BACKOFFICE</span>
+                        <h2 className="text-4xl md:text-5xl font-black tracking-tighter uppercase text-zinc-950">Trésorerie</h2>
+                        <p className="text-zinc-500 text-sm mt-1">Gestion financière, suivi des flux et comptabilité analytique</p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-zinc-50 p-4 rounded-2xl border border-zinc-100 font-mono text-xs text-zinc-650">
+                        <div className="flex items-center gap-2">
+                          <Activity size={14} className="text-emerald-500 animate-pulse" />
+                          <span className="font-bold uppercase tracking-wider text-[10px] text-zinc-400">Système Live:</span>
+                          <span className="text-zinc-800 font-bold">Actif</span>
+                        </div>
+                        <div className="hidden sm:block text-zinc-300">|</div>
+                        <div className="text-zinc-650 font-bold">
+                          {new Date().toLocaleDateString("fr-FR", {
+                            weekday: "long",
+                            day: "numeric",
+                            month: "long",
+                            year: "numeric"
+                          })}
+                        </div>
+                      </div>
+                    </header>
+
+                    {/* Financial Summary & Goals Progress */}
+                    {(() => {
+                      const list = financeTransactions;
+                      
+                      const totalIn = list.filter(t => t.type === "in" && !t.archived).reduce((acc, current) => acc + (parseFloat(String(current.amount)) || 0), 0);
+                      const totalOut = list.filter(t => t.type === "out" && !t.archived).reduce((acc, current) => acc + (parseFloat(String(current.amount)) || 0), 0);
+                      const currentBalance = totalIn - totalOut;
+
+                      // Goal progression
+                      const financialGoal = financeGoals.length > 0 ? (parseFloat(String(financeGoals[0].amount)) || 25000) : 25000;
+                      const goalTitle = financeGoals.length > 0 ? financeGoals[0].title : "Objectif de Trésorerie";
+                      const goalProgressPercentage = Math.min(100, Math.max(0, parseFloat(((currentBalance / financialGoal) * 100).toFixed(1))));
+
+                      // Chart Area Data - Only including non-archived transactions sorted chronologically
+                      const sortedTimeline = [...list]
+                        .filter(t => !t.archived && t.date)
+                        .sort((a, b) => {
+                          const strA = a.date.includes("T") ? a.date : `${a.date}T00:00`;
+                          const strB = b.date.includes("T") ? b.date : `${b.date}T00:00`;
+                          const dateA = new Date(strA).getTime();
+                          const dateB = new Date(strB).getTime();
+                          if (dateA !== dateB) return dateA - dateB;
+                          return (a.id || "").localeCompare(b.id || "");
+                        });
+                      
+                      let cumulativeBalance = 0;
+                      const chartData = [
+                        {
+                          index: 0,
+                          name: "Début",
+                          dateFull: "Solde initial",
+                          description: "Fond de départ",
+                          change: 0,
+                          amount: 0,
+                          type: "in",
+                          changeStr: "0 DH",
+                          Solde: 0
+                        },
+                        ...sortedTimeline.map((current, idx) => {
+                          const dateStr = new Date(current.date).toLocaleDateString("fr-FR", { month: "short", day: "numeric" });
+                          const amt = parseFloat(String(current.amount)) || 0;
+                          const change = current.type === "in" ? amt : -amt;
+                          cumulativeBalance += change;
+                          return {
+                            index: idx + 1,
+                            name: dateStr,
+                            dateFull: formatTransactionDate(current.date),
+                            description: current.description || "",
+                            change: change,
+                            amount: amt,
+                            type: current.type,
+                            changeStr: current.type === "in" ? `+ ${amt.toLocaleString("fr-FR")} DH` : `- ${amt.toLocaleString("fr-FR")} DH`,
+                            Solde: cumulativeBalance
+                          };
+                        })
+                      ];
+
+                      // Category Breakdown Data - non-archived transactions & expenses expressed as negative numbers for volume columns
+                      const rawCategoryMap = list.filter(t => !t.archived).reduce((acc: any, current) => {
+                        const cat = current.category || "Autre";
+                        const amt = parseFloat(String(current.amount)) || 0;
+                        const change = current.type === "in" ? amt : -amt;
+                        acc[cat] = (acc[cat] || 0) + change;
+                        return acc;
+                      }, {});
+
+                      const colorsMap: any = {
+                        "Sponsoring": "#10B981", // Emerald
+                        "Cotisation": "#3B82F6", // Blue
+                        "Subvention": "#F59E0B", // Amber
+                        "Événement": "#EF4444", // Red
+                        "Logistique": "#8B5CF6", // Purple
+                        "Communication": "#EC4899", // Pink
+                        "Restauration": "#EAB308", // Yellow
+                        "Transport": "#6366F1", // Indigo
+                        "Impression": "#14B8A6", // Teal
+                        "Remboursement": "#F97316" // Orange
+                      };
+
+                      const categoryData = Object.keys(rawCategoryMap).map(catName => ({
+                        name: catName,
+                        value: rawCategoryMap[catName],
+                        color: colorsMap[catName] || "#64748B"
+                      }));
+
+                      return (
+                        <div className="space-y-10">
+                          {/* Top Metric Cards */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            {/* Card Solde */}
+                            <motion.div 
+                              whileHover={{ y: -4 }}
+                              className="bg-zinc-900 text-white rounded-3xl p-8 border border-zinc-850 shadow-xl overflow-hidden relative"
+                            >
+                              <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 rounded-full blur-3xl pointer-events-none" />
+                              <div className="flex justify-between items-start mb-6">
+                                <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-400">Solde Net Restant</span>
+                                <div className="p-3 bg-zinc-800/80 rounded-2xl text-white">
+                                  <Wallet size={20} />
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                <h3 className={`text-4xl md:text-5xl font-black tracking-tight ${currentBalance >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                  {currentBalance.toLocaleString("fr-FR")} <span className="text-lg">DH</span>
+                                </h3>
+                                {financeGoals.length > 0 ? (
+                                  <p className="text-xs text-zinc-400 flex items-center gap-1">
+                                    <TrendingUp size={14} className="text-emerald-400" />
+                                    <span className="text-zinc-300 font-bold font-mono">+{goalProgressPercentage}%</span> de l'objectif <strong className="text-zinc-300 font-black">"{goalTitle}"</strong> ({financialGoal.toLocaleString("fr-FR")} DH)
+                                  </p>
+                                ) : (
+                                  <p className="text-xs text-zinc-500 font-sans">
+                                    Aucun objectif de trésorerie actif
+                                  </p>
+                                )}
+                              </div>
+                              <div className="mt-8 flex items-end gap-1 h-8 opacity-40">
+                                {[30, 45, 35, 60, 50, 80, 75, 95, 85, 110].map((h, i) => (
+                                  <div key={i} className="flex-1 bg-emerald-400 rounded-t" style={{ height: `${h}%` }} />
+                                ))}
+                              </div>
+                            </motion.div>
+
+                            {/* Card Entrées */}
+                            <motion.div 
+                              whileHover={{ y: -4 }}
+                              className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm relative overflow-hidden"
+                            >
+                              <div className="flex justify-between items-start mb-6">
+                                <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-400">Total des Entrées</span>
+                                <div className="p-3 bg-emerald-50 text-emerald-650 rounded-2xl">
+                                  <ArrowUpRight size={20} />
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                <h3 className="text-4xl md:text-5xl font-black tracking-tight text-zinc-950">
+                                  {totalIn.toLocaleString("fr-FR")} <span className="text-lg font-normal text-zinc-500">DH</span>
+                                </h3>
+                                <p className="text-xs text-emerald-600 font-bold uppercase tracking-wider">Provenance de Sponsoring & Cotisations</p>
+                              </div>
+                              <div className="mt-8 flex items-end gap-1 h-8 opacity-20">
+                                {[20, 30, 25, 55, 45, 60, 65, 80, 95, 100].map((h, i) => (
+                                  <div key={i} className="flex-1 bg-zinc-900 rounded-t" style={{ height: `${h}%` }} />
+                                ))}
+                              </div>
+                            </motion.div>
+
+                            {/* Card Sorties */}
+                            <motion.div 
+                              whileHover={{ y: -4 }}
+                              className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm relative overflow-hidden"
+                            >
+                              <div className="flex justify-between items-start mb-6">
+                                <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-400">Dépenses Réalisées</span>
+                                <div className="p-3 bg-rose-50 text-rose-650 rounded-2xl">
+                                  <ArrowDownRight size={20} />
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                <h3 className="text-4xl md:text-5xl font-black tracking-tight text-zinc-950">
+                                  {totalOut.toLocaleString("fr-FR")} <span className="text-lg font-normal text-zinc-500">DH</span>
+                                </h3>
+                                <p className="text-xs text-rose-500 font-bold uppercase tracking-wider">Logistique, impression & restauration</p>
+                              </div>
+                              <div className="mt-8 flex items-end gap-1 h-8 opacity-20">
+                                {[10, 40, 20, 50, 35, 70, 45, 60, 55, 90].map((h, i) => (
+                                  <div key={i} className="flex-1 bg-rose-500 rounded-t" style={{ height: `${h}%` }} />
+                                ))}
+                              </div>
+                            </motion.div>
+                          </div>
+
+                          {/* Quick Actions Panel */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-zinc-50 p-6 rounded-3xl border border-zinc-100 shadow-inner">
+                            <button
+                              onClick={() => {
+                                setIncomeForm({
+                                  amount: "",
+                                  source: "",
+                                  category: "Sponsoring",
+                                  description: "",
+                                  date: new Date().toISOString().split("T")[0],
+                                  attachmentUrl: ""
+                                });
+                                setShowAddIncomeModal(true);
+                              }}
+                              className="group p-8 bg-white hover:bg-zinc-950 hover:text-white rounded-2xl border border-zinc-150 transition-all duration-300 flex items-center justify-between text-left shadow-sm hover:shadow-lg"
+                            >
+                              <div className="space-y-1.5 text-left">
+                                <div className="p-3.5 bg-emerald-50 group-hover:bg-emerald-500/10 text-emerald-600 rounded-2xl inline-block mb-3 transition-colors">
+                                  <Plus size={24} />
+                                </div>
+                                <h4 className="text-xl font-black tracking-tight uppercase">Ajouter de l'argent</h4>
+                                <p className="text-xs text-zinc-400 font-medium">Revenu de sponsor, cotisation, subvention, etc.</p>
+                              </div>
+                              <ChevronRight size={22} className="text-zinc-350 group-hover:translate-x-1.5 transition-transform" />
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setExpenseForm({
+                                  amount: "",
+                                  description: "",
+                                  category: "Événement",
+                                  responsible: "",
+                                  date: new Date().toISOString().split("T")[0],
+                                  attachmentUrl: "",
+                                  priority: "Moyenne"
+                                });
+                                setShowAddExpenseModal(true);
+                              }}
+                              className="group p-8 bg-white hover:bg-zinc-950 hover:text-white rounded-2xl border border-zinc-150 transition-all duration-300 flex items-center justify-between text-left shadow-sm hover:shadow-lg"
+                            >
+                              <div className="space-y-1.5 text-left">
+                                <div className="p-3.5 bg-rose-50 group-hover:bg-rose-500/10 text-rose-600 rounded-2xl inline-block mb-3 transition-colors">
+                                  <Trash2 size={24} className="text-rose-500" />
+                                </div>
+                                <h4 className="text-xl font-black tracking-tight uppercase">Retirer de l'argent</h4>
+                                <p className="text-xs text-rose-500/70 group-hover:text-rose-400 font-medium">Motif détaillé, responsable et justificatifs...</p>
+                              </div>
+                              <ChevronRight size={22} className="text-zinc-350 group-hover:translate-x-1.5 transition-transform" />
+                            </button>
+                          </div>
+
+                          {/* Category Switcher Tabs */}
+                          <div className="border-b border-zinc-100 flex gap-2 overflow-x-auto scrollbar-none pt-2">
+                            {[
+                              { id: 'overview', label: "Vue financière" },
+                              { id: 'ledger', label: "Relevé détaillé" },
+                              { id: 'analytics', label: "Statistiques" },
+                              { id: 'goals', label: "Objectifs" }
+                            ].map((tab) => (
+                              <button
+                                key={tab.id}
+                                onClick={() => setFinanceSubTab(tab.id as any)}
+                                className={`
+                                  px-6 py-4 text-[11px] font-bold uppercase tracking-widest border-b-2 transition-all shrink-0
+                                  ${financeSubTab === tab.id 
+                                    ? "border-primary text-primary" 
+                                    : "border-transparent text-zinc-400 hover:text-zinc-950"}
+                                `}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Overview Dashboard view */}
+                          {financeSubTab === 'overview' && (
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fade-in">
+                              {/* Left Columns - Activities timeline */}
+                              <div className="lg:col-span-8 space-y-8">
+                                <div className="flex justify-between items-center">
+                                  <h4 className="text-xl font-black text-zinc-950 uppercase tracking-tight">Activité Récente</h4>
+                                  <button onClick={() => setFinanceSubTab('ledger')} className="text-xs text-primary font-bold hover:underline">Consulter tout le livre</button>
+                                </div>
+
+                                <div className="space-y-4">
+                                  {list.slice(0, 5).map((t) => (
+                                    <div 
+                                      key={t.id} 
+                                      className="flex items-center justify-between p-5 bg-white border border-zinc-100 rounded-2xl hover:border-zinc-200 transition-all shadow-sm group"
+                                    >
+                                      <div className="flex items-center gap-4">
+                                        <div className={`
+                                          w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm
+                                          ${t.type === "in" ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-500"}
+                                        `}>
+                                          {t.type === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
+                                        </div>
+                                        <div>
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-bold text-zinc-950 text-sm">{t.description}</span>
+                                            {t.favorite && <Star size={13} className="fill-yellow-400 text-yellow-400" />}
+                                          </div>
+                                          <div className="flex items-center gap-2.5 text-xs text-zinc-400 mt-1">
+                                            <span className="font-semibold text-zinc-700 bg-zinc-50 px-2 py-0.5 rounded border border-zinc-150">{t.category}</span>
+                                            <span>•</span>
+                                            <span>Responsable: <strong className="text-zinc-650">{t.responsible}</strong></span>
+                                            <span>•</span>
+                                            <span className="font-mono text-[11px]">{formatTransactionDate(t.date)}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-4">
+                                        <span className={`text-sm font-black font-mono ${t.type === "in" ? "text-emerald-600" : "text-rose-500"}`}>
+                                          {t.type === "in" ? "+" : "-"}{t.amount.toLocaleString("fr-FR")} DH
+                                        </span>
+                                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <button 
+                                            onClick={() => toggleTransactionFavorite(t.id, !!t.favorite)}
+                                            className="p-1.5 text-zinc-400 hover:text-yellow-500 rounded hover:bg-zinc-50"
+                                          >
+                                            <Star size={14} className={t.favorite ? "fill-yellow-400 text-yellow-400" : ""} />
+                                          </button>
+                                          <button 
+                                            onClick={() => handleDeleteItem("financeTransactions", t.id)}
+                                            className="p-1.5 text-zinc-400 hover:text-red-500 rounded hover:bg-red-50"
+                                          >
+                                            <Trash2 size={14} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Right column - Target Progress, Mini Calendar Expense view, Notes */}
+                              <div className="lg:col-span-4 space-y-8">
+                                {/* Target widgets */}
+                                {financeGoals.length > 0 ? (
+                                  <div className="bg-white border border-zinc-100 rounded-3xl p-6 shadow-sm space-y-4">
+                                    <div className="flex justify-between items-center">
+                                      <h4 className="text-xs font-black tracking-widest text-zinc-400 uppercase">Objectif Trésor</h4>
+                                      <Target className="text-primary animate-pulse" size={16} />
+                                    </div>
+                                    <div>
+                                      <div className="flex justify-between items-end mb-2">
+                                        <span className="text-lg font-black text-zinc-950">{currentBalance.toLocaleString("fr-FR")} DH</span>
+                                        <span className="text-xs font-bold text-zinc-450">Seuil: {financialGoal.toLocaleString("fr-FR")} DH</span>
+                                      </div>
+                                      <div className="w-full bg-zinc-100 h-2 rounded-full overflow-hidden">
+                                        <div className={`h-full rounded-full ${currentBalance >= financialGoal ? 'bg-emerald-500' : 'bg-primary'}`} style={{ width: `${goalProgressPercentage}%` }} />
+                                      </div>
+                                      <div className="flex justify-between text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-1.5 flex-wrap gap-1">
+                                        <span className="truncate max-w-[120px]" title={goalTitle}>"{goalTitle}"</span>
+                                        <span>{goalProgressPercentage}% atteint</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="bg-white border border-dashed border-zinc-200 rounded-3xl p-6 shadow-sm text-center py-8 space-y-2">
+                                    <p className="text-xs text-zinc-400 font-sans">Aucun objectif de trésorerie actif</p>
+                                    <button 
+                                      onClick={() => {
+                                        setGoalForm({ title: "", amount: "", description: "" });
+                                        setShowAddGoalModal(true);
+                                      }}
+                                      className="text-[10px] font-black uppercase text-primary tracking-widest hover:underline font-sans"
+                                    >
+                                      Créer un objectif +
+                                    </button>
+                                  </div>
+                                )}
+
+                                {/* Calendar of the month pastilles */}
+                                <div className="bg-white border border-zinc-100 rounded-3xl p-6 shadow-sm space-y-4">
+                                  <div className="flex justify-between items-center border-b border-zinc-50 pb-3">
+                                    <div className="space-y-0.5">
+                                      <h4 className="text-xs font-black tracking-widest text-zinc-400 uppercase">Journée des flux</h4>
+                                      <h5 className="text-sm font-bold text-zinc-950 font-sans">
+                                        {(() => {
+                                          const monthNamesFR = [
+                                            "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                                            "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+                                          ];
+                                          return `${monthNamesFR[calendarMonth]} ${calendarYear}`;
+                                        })()}
+                                      </h5>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button 
+                                        onClick={() => {
+                                          if (calendarMonth === 0) {
+                                            setCalendarMonth(11);
+                                            setCalendarYear(prev => prev - 1);
+                                          } else {
+                                            setCalendarMonth(prev => prev - 1);
+                                          }
+                                        }}
+                                        className="p-1.5 hover:bg-zinc-100 rounded-xl text-zinc-500 hover:text-zinc-950 transition-colors"
+                                        title="Mois précédent"
+                                      >
+                                        <ChevronLeft size={16} />
+                                      </button>
+                                      <button 
+                                        onClick={() => {
+                                          if (calendarMonth === 11) {
+                                            setCalendarMonth(0);
+                                            setCalendarYear(prev => prev + 1);
+                                          } else {
+                                            setCalendarMonth(prev => prev + 1);
+                                          }
+                                        }}
+                                        className="p-1.5 hover:bg-zinc-100 rounded-xl text-zinc-500 hover:text-zinc-950 transition-colors"
+                                        title="Mois suivant"
+                                      >
+                                        <ChevronRight size={16} />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-7 gap-1 text-center font-mono text-[10px]">
+                                    {["L", "M", "M", "J", "V", "S", "D"].map((day, ix) => (
+                                      <div key={ix} className="font-bold text-zinc-400 py-1">{day}</div>
+                                    ))}
+                                    
+                                    {/* Offset first day of month */}
+                                    {(() => {
+                                      const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+                                      const rawFirstDayIndex = new Date(calendarYear, calendarMonth, 1).getDay(); // Sunday is 0, Monday is 1...
+                                      // Align with Mon-Sun grid: mapped so Mon is 0, Tue is 1, ..., Sun is 6
+                                      const startingDayOfWeek = (rawFirstDayIndex === 0 ? 6 : rawFirstDayIndex - 1);
+                                      
+                                      const emptyDays = Array.from({ length: startingDayOfWeek }).map((_, i) => (
+                                        <div key={`empty-${i}`} className="h-9" />
+                                      ));
+                                      
+                                      const activeDays = Array.from({ length: daysInMonth }).map((_, inx) => {
+                                        const dayNum = inx + 1;
+                                        const monthStr = String(calendarMonth + 1).padStart(2, '0');
+                                        const dayStr = `${calendarYear}-${monthStr}-${String(dayNum).padStart(2, '0')}`;
+                                        const dayTrans = list.filter(t => t.date ? t.date.startsWith(dayStr) : false);
+                                        const hasIn = dayTrans.some(t => t.type === "in");
+                                        const hasOut = dayTrans.some(t => t.type === "out");
+                                        
+                                        const isToday = (calendarYear === 2026 && calendarMonth === 4 && dayNum === 23) || (
+                                          new Date().getFullYear() === calendarYear &&
+                                          new Date().getMonth() === calendarMonth &&
+                                          new Date().getDate() === dayNum
+                                        );
+
+                                        return (
+                                          <div 
+                                            key={inx} 
+                                            className={`
+                                              p-1 rounded-lg border border-transparent flex flex-col justify-between h-9 transition-all
+                                              ${isToday ? "bg-primary text-white font-bold shadow-sm shadow-primary/20" : "text-zinc-800 bg-zinc-50/50 hover:bg-zinc-100/70"}
+                                            `}
+                                            title={`${dayTrans.length} transaction(s)`}
+                                          >
+                                            <span className="text-[10px]">{dayNum}</span>
+                                            <div className="flex justify-center gap-[1px]">
+                                              {hasIn && <div className="w-1 h-1 rounded-full bg-emerald-500" />}
+                                              {hasOut && <div className="w-1 h-1 rounded-full bg-rose-500" />}
+                                            </div>
+                                          </div>
+                                        );
+                                      });
+
+                                      return [...emptyDays, ...activeDays];
+                                    })()}
+                                  </div>
+                                </div>
+
+                                {/* Notes section */}
+                                <div className="bg-white border border-zinc-100 rounded-3xl p-6 shadow-sm space-y-3">
+                                  <h4 className="text-xs font-black tracking-widest text-zinc-400 uppercase">Bloc-Notes Comptabilité</h4>
+                                  <textarea
+                                    value={internalNotes}
+                                    onChange={(e) => handleUpdateInternalNotes(e.target.value)}
+                                    placeholder="Ajouter des annotations ou mémos comptables ici..."
+                                    rows={4}
+                                    className="w-full bg-zinc-50 border border-zinc-100 rounded-2xl p-4 text-xs font-serif leading-relaxed outline-none focus:border-primary focus:bg-white transition-all resize-none"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Account Ledger Detailed Table views */}
+                          {financeSubTab === 'ledger' && (
+                            <section className="space-y-6 animate-fade-in">
+                              
+                              {/* Filter, select, and search bars */}
+                              <div className="flex flex-col xl:flex-row gap-4 justify-between items-start xl:items-center bg-zinc-50 p-4 rounded-3xl border border-zinc-150 shadow-inner">
+                                <div className="flex flex-col sm:flex-row gap-3 w-full xl:w-auto">
+                                  {/* Search input to filter */}
+                                  <div className="relative flex-1 sm:w-64">
+                                    <Search className="absolute left-4 top-3.5 text-zinc-400" size={16} />
+                                    <input 
+                                      type="text" 
+                                      placeholder="Mémo, catégorie, responsable..."
+                                      value={financeSearch}
+                                      onChange={(e) => setFinanceSearch(e.target.value)}
+                                      className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl outline-none focus:border-primary text-xs"
+                                    />
+                                  </div>
+
+                                  {/* Filter types */}
+                                  <select
+                                    value={financeTypeFilter}
+                                    onChange={(e) => setFinanceTypeFilter(e.target.value)}
+                                    className="px-4 py-3 bg-white border border-zinc-200 rounded-2xl text-xs outline-none focus:border-primary font-bold"
+                                  >
+                                    <option value="all">Tous les types</option>
+                                    <option value="in">Entrées (+)</option>
+                                    <option value="out">Sorties (-)</option>
+                                  </select>
+
+                                  {/* Filter cats */}
+                                  <select
+                                    value={financeCatFilter}
+                                    onChange={(e) => setFinanceCatFilter(e.target.value)}
+                                    className="px-4 py-3 bg-white border border-zinc-200 rounded-2xl text-xs outline-none focus:border-primary font-bold"
+                                  >
+                                    <option value="all">Toutes catégories</option>
+                                    <option value="Sponsoring">Sponsoring</option>
+                                    <option value="Cotisation">Cotisation</option>
+                                    <option value="Subvention">Subvention</option>
+                                    <option value="Événement">Événement</option>
+                                    <option value="Logistique">Logistique</option>
+                                    <option value="Communication">Communication</option>
+                                    <option value="Restauration">Restauration</option>
+                                    <option value="Transport">Transport</option>
+                                    <option value="Impression">Impression</option>
+                                    <option value="Remboursement">Remboursement</option>
+                                  </select>
+                                </div>
+
+                                <div className="flex items-center gap-3 w-full sm:w-auto justify-between xl:justify-end">
+                                  {/* Sort elements */}
+                                  <select
+                                    value={financeSortBy}
+                                    onChange={(e) => setFinanceSortBy(e.target.value)}
+                                    className="px-4 py-3 bg-white border border-zinc-200 rounded-2xl text-xs outline-none focus:border-primary font-bold"
+                                  >
+                                    <option value="newest">Plus récentes</option>
+                                    <option value="oldest">Plus anciennes</option>
+                                    <option value="amountDesc">Montants élevés</option>
+                                    <option value="amountAsc">Montants faibles</option>
+                                    <option value="favorites">Éléments Favoris</option>
+                                  </select>
+
+                                  <button
+                                    onClick={exportFinanceToCSV}
+                                    className="px-5 py-3 bg-zinc-950 hover:bg-zinc-850 text-white rounded-2xl text-[10.5px] font-bold uppercase tracking-wider flex items-center gap-2 transition-all shadow-sm"
+                                  >
+                                    <Download size={14} />
+                                    <span>Export CSV</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Ledger table markup design */}
+                              {(() => {
+                                const listToFilter = financeTransactions;
+                                const term = financeSearch.toLowerCase();
+                                const filtered = listToFilter.filter(t => {
+                                  const textMatch = 
+                                    (t.description || "").toLowerCase().includes(term) ||
+                                    (t.category || "").toLowerCase().includes(term) ||
+                                    (t.responsible || "").toLowerCase().includes(term);
+                                  
+                                  const typeMatch = financeTypeFilter === "all" || t.type === financeTypeFilter;
+                                  const catMatch = financeCatFilter === "all" || t.category === financeCatFilter;
+
+                                  return textMatch && typeMatch && catMatch;
+                                }).sort((a,b) => {
+                                  const strA = a.date ? (a.date.includes("T") ? a.date : `${a.date}T00:00`) : "1970-01-01T00:00";
+                                  const strB = b.date ? (b.date.includes("T") ? b.date : `${b.date}T00:00`) : "1970-01-01T00:00";
+                                  if (financeSortBy === "newest") return new Date(strB).getTime() - new Date(strA).getTime();
+                                  if (financeSortBy === "oldest") return new Date(strA).getTime() - new Date(strB).getTime();
+                                  if (financeSortBy === "amountDesc") return b.amount - a.amount;
+                                  if (financeSortBy === "amountAsc") return a.amount - b.amount;
+                                  if (financeSortBy === "favorites") return (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0);
+                                  return 0;
+                                });
+
+                                if (filtered.length === 0) {
+                                  return (
+                                    <div className="bg-white p-12 text-center rounded-2xl border border-zinc-100 italic text-zinc-400">
+                                      Aucune transaction trouvée.
+                                    </div>
+                                  );
+                                }
+
+                                return (
+                                  <div className="bg-white rounded-3xl border border-zinc-100 shadow-sm overflow-hidden">
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-left border-collapse">
+                                        <thead>
+                                          <tr className="bg-zinc-50/50 border-b border-zinc-100 text-[10px] uppercase tracking-wider text-zinc-400 font-bold">
+                                            <th className="p-6">Type & Motif</th>
+                                            <th className="p-6">Montant</th>
+                                            <th className="p-6">Catégorie</th>
+                                            <th className="p-6">Responsable</th>
+                                            <th className="p-6">Date transaction</th>
+                                            <th className="p-6">Pièce jointe</th>
+                                            <th className="p-6 text-right">Actions</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-zinc-50 text-[13px] text-zinc-650">
+                                          {filtered.map((t) => (
+                                            <tr key={t.id} className="hover:bg-zinc-50/20 transition-all group">
+                                              {/* Description */}
+                                              <td className="p-6">
+                                                <div className="flex items-center gap-3">
+                                                  <div className={`
+                                                    w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0
+                                                    ${t.type === "in" ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-500"}
+                                                  `}>
+                                                    {t.type === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                                                  </div>
+                                                  <div>
+                                                    <div className="flex items-center gap-1.5">
+                                                      <span className="font-bold text-zinc-950 text-sm leading-tight">{t.description}</span>
+                                                      {t.favorite && <Star size={12} className="fill-yellow-400 text-yellow-400 shrink-0" />}
+                                                    </div>
+                                                    {t.type === "out" && t.priority && (
+                                                      <span className={`
+                                                        text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full inline-block mt-0.5
+                                                        ${t.priority === "Haute" ? "bg-rose-50 text-rose-600 border border-rose-100" : t.priority === "Moyenne" ? "bg-amber-50 text-amber-600" : "bg-zinc-100 text-zinc-500"}
+                                                      `}>
+                                                        Priorité {t.priority}
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                              </td>
+
+                                              {/* Montant */}
+                                              <td className="p-6">
+                                                <span className={`font-mono font-black text-sm ${t.type === "in" ? "text-emerald-600" : "text-rose-500"}`}>
+                                                  {t.type === "in" ? "+" : "-"}{t.amount.toLocaleString("fr-FR")} DH
+                                                </span>
+                                              </td>
+
+                                              {/* Categorie */}
+                                              <td className="p-6">
+                                                <span className="px-2.5 py-1 text-zinc-550 bg-zinc-50 border border-zinc-150 rounded-full font-bold text-[10px] tracking-wider uppercase">
+                                                  {t.category}
+                                                </span>
+                                              </td>
+
+                                              {/* Payeur / Responsable */}
+                                              <td className="p-6 text-zinc-850 font-medium">
+                                                {t.responsible}
+                                              </td>
+
+                                              {/* Date transaction */}
+                                              <td className="p-6 text-zinc-450 font-mono text-xs">
+                                                {formatTransactionDate(t.date)}
+                                              </td>
+
+                                              {/* Justif cliquable */}
+                                              <td className="p-6">
+                                                {t.attachmentUrl ? (
+                                                  <a 
+                                                    href={t.attachmentUrl} 
+                                                    target="_blank" 
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 text-primary hover:underline text-xs font-bold"
+                                                  >
+                                                    <Paperclip size={13} className="shrink-0" />
+                                                    <span className="font-mono text-[10px] uppercase tracking-wider">Lien Drive</span>
+                                                  </a>
+                                                ) : (
+                                                  <span className="text-zinc-350 italic text-[11px]">- Aucun -</span>
+                                                )}
+                                              </td>
+
+                                              {/* Deletion & star actions */}
+                                              <td className="p-6 text-right">
+                                                <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                  <button 
+                                                    onClick={() => toggleTransactionFavorite(t.id, !!t.favorite)}
+                                                    className="p-1.5 text-zinc-400 hover:text-yellow-500 hover:bg-yellow-55/70 rounded-lg transition-colors border border-transparent hover:border-yellow-200"
+                                                    title="Mettre en favori"
+                                                  >
+                                                    <Star size={15} className={t.favorite ? "fill-yellow-400 text-yellow-400" : ""} />
+                                                  </button>
+                                                  
+                                                  <button
+                                                    onClick={() => handleDeleteItem("financeTransactions", t.id)}
+                                                    className="p-1.5 text-zinc-455 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                    title="Supprimer la transaction"
+                                                  >
+                                                    <Trash2 size={15} />
+                                                  </button>
+                                                </div>
+                                              </td>
+
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                  );
+                              })()}
+                            </section>
+                          )}
+
+                          {/* Recharts Analytics dashboard */}
+                          {financeSubTab === 'analytics' && (
+                            <div className="space-y-10 animate-fade-in">
+                              
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                {/* area chart */}
+                                <div className="bg-white border border-zinc-150 shadow-sm p-6 rounded-3xl space-y-4">
+                                  <div>
+                                    <span className="text-[9px] font-black tracking-widest text-zinc-400 uppercase">Evolution</span>
+                                    <h4 className="text-xl font-bold text-zinc-950 uppercase tracking-tight">Flux de comptabilité net</h4>
+                                  </div>
+                                  <div className="h-72 w-full pt-4">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                                        <defs>
+                                          <linearGradient id="colorBalanceTab" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
+                                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                          </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f4f4f5" />
+                                        <XAxis 
+                                          dataKey="index" 
+                                          tickFormatter={(tick) => {
+                                            return chartData[tick]?.name || '';
+                                          }}
+                                          stroke="#a1a1aa" 
+                                          fontSize={10} 
+                                          tickLine={false} 
+                                        />
+                                        <YAxis stroke="#a1a1aa" fontSize={10} tickLine={false} />
+                                        <Tooltip content={({ active, payload }: any) => {
+                                          if (active && payload && payload.length) {
+                                            const data = payload[0].payload;
+                                            const isPositive = data.change >= 0;
+                                            return (
+                                              <div className="bg-zinc-950 text-white p-4 rounded-2xl border border-zinc-800 shadow-2xl text-[11px] space-y-2 text-left">
+                                                <div className="flex justify-between items-center gap-4 text-[9px] text-zinc-400 font-bold uppercase tracking-wider">
+                                                  <span>{data.name}</span>
+                                                  <span className="font-mono">{data.dateFull}</span>
+                                                </div>
+                                                <p className="font-bold text-zinc-100 max-w-[180px] leading-tight break-words">
+                                                  {data.description}
+                                                </p>
+                                                <div className="border-t border-zinc-905 pt-2 space-y-1">
+                                                  <div className="flex justify-between items-center gap-6">
+                                                    <span className="text-zinc-400 font-medium">Transaction:</span>
+                                                    <span className={`font-mono font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                      {data.changeStr}
+                                                    </span>
+                                                  </div>
+                                                  <div className="flex justify-between items-center gap-6 border-t border-zinc-900 pt-1.5 mt-1">
+                                                    <span className="text-zinc-400 font-bold text-[9px] uppercase tracking-wider">Solde Cumulé:</span>
+                                                    <span className="font-mono font-black text-blue-400">
+                                                      {data.Solde.toLocaleString("fr-FR")} DH
+                                                    </span>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          }
+                                          return null;
+                                        }} />
+                                        <Area type="monotone" dataKey="Solde" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#colorBalanceTab)" />
+                                      </AreaChart>
+                                    </ResponsiveContainer>
+                                  </div>
+                                </div>
+
+                                {/* bar chart */}
+                                <div className="bg-white border border-zinc-150 shadow-sm p-6 rounded-3xl space-y-4">
+                                  <div>
+                                    <span className="text-[9px] font-black tracking-widest text-zinc-400 uppercase">Repartition</span>
+                                    <h4 className="text-xl font-bold text-zinc-950 uppercase tracking-tight">Répartition par volume</h4>
+                                  </div>
+                                  <div className="h-72 w-full pt-4">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <BarChart data={categoryData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f4f4f5" />
+                                        <XAxis dataKey="name" stroke="#a1a1aa" fontSize={9} tickLine={false} />
+                                        <YAxis stroke="#a1a1aa" fontSize={10} tickLine={false} />
+                                        <Tooltip content={({ active, payload }: any) => {
+                                          if (active && payload && payload.length) {
+                                            const data = payload[0].payload;
+                                            const val = parseFloat(String(data.value)) || 0;
+                                            const isPositive = val >= 0;
+                                            return (
+                                              <div className="bg-zinc-950 text-white p-4 rounded-2xl border border-zinc-800 shadow-2xl text-[11px] space-y-1.5 text-left">
+                                                <div className="flex items-center gap-2">
+                                                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: data.color }} />
+                                                  <span className="font-bold text-zinc-200 uppercase tracking-tight text-[10px]">{data.name}</span>
+                                                </div>
+                                                <div className="border-t border-zinc-900 pt-1.5 flex justify-between items-center gap-6">
+                                                  <span className="text-zinc-400 font-medium">Volume Net :</span>
+                                                  <span className={`font-mono font-black ${isPositive ? 'text-emerald-400' : 'text-rose-450'}`}>
+                                                    {isPositive ? '+' : ''}{val.toLocaleString("fr-FR")} DH
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            );
+                                          }
+                                          return null;
+                                        }} />
+                                        <ReferenceLine y={0} stroke="#cbd5e0" strokeWidth={1} />
+                                        <Bar dataKey="value" radius={4}>
+                                          {categoryData.map((entry, index) => (
+                                            <Cell key={`cell-tab-${index}`} fill={entry.color} />
+                                          ))}
+                                        </Bar>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                  </div>
+                                </div>
+                              </div>
+
+                            </div>
+                          )}
+
+                          {/* Financial Goals Subtab View */}
+                          {financeSubTab === 'goals' && (
+                            <div className="space-y-8 animate-fade-in">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div>
+                                  <h4 className="text-xl font-black text-zinc-950 uppercase tracking-tight font-sans">Objectifs de Trésorerie</h4>
+                                  <p className="text-xs text-zinc-400 mt-0.5 font-sans">Configurez et analysez vos différents objectifs de financement</p>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    setGoalForm({ title: "", amount: "", description: "" });
+                                    setShowAddGoalModal(true);
+                                  }}
+                                  className="flex items-center gap-2 px-6 py-3 bg-zinc-900 border border-zinc-800 text-white rounded-2xl hover:bg-primary hover:border-primary text-xs font-black uppercase tracking-wider transition-all shadow-sm"
+                                >
+                                  <Plus size={16} /> Ajouter un objectif
+                                </button>
+                              </div>
+
+                              {financeGoals.length === 0 ? (
+                                <div className="text-center py-16 bg-zinc-50 border border-dashed border-zinc-200 rounded-3xl space-y-4">
+                                  <div className="inline-flex items-center justify-center w-16 h-16 bg-zinc-100 text-zinc-400 rounded-full">
+                                    <Target size={32} />
+                                  </div>
+                                  <div className="space-y-1 max-w-sm mx-auto">
+                                    <h5 className="text-sm font-bold text-zinc-950 uppercase tracking-tight">Aucun objectif défini</h5>
+                                    <p className="text-xs text-zinc-400">Le système n'a trouvé aucun objectif de trésorerie. Ajoutez-en un pour suivre la progression de vos campagnes.</p>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      setGoalForm({ title: "", amount: "", description: "" });
+                                      setShowAddGoalModal(true);
+                                    }}
+                                    className="px-5 py-2.5 bg-white border border-zinc-200 text-zinc-950 hover:bg-zinc-50 rounded-xl text-xs font-bold uppercase tracking-wider transition-all"
+                                  >
+                                    Initialiser un objectif
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                  {financeGoals.map((g) => {
+                                    const goalAmt = parseFloat(g.amount) || 25000;
+                                    const pct = Math.min(100, Math.max(0, parseFloat(((currentBalance / goalAmt) * 100).toFixed(1))));
+                                    const isReached = currentBalance >= goalAmt;
+
+                                    return (
+                                      <div 
+                                        key={g.id} 
+                                        className="bg-white border border-zinc-150 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-6 relative overflow-hidden text-left"
+                                        id={`goal-item-${g.id}`}
+                                      >
+                                        {isReached && (
+                                          <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-bl-xl flex items-center gap-1">
+                                            <Sparkles size={10} /> Atteint
+                                          </div>
+                                        )}
+                                        
+                                        <div className="space-y-2">
+                                          <div className="inline-flex items-center justify-center p-2.5 bg-zinc-50 border border-zinc-100 rounded-xl text-zinc-700">
+                                            <Target size={18} />
+                                          </div>
+                                          <div>
+                                            <h5 className="font-bold text-zinc-950 line-clamp-1">{g.title || "Sans Titre"}</h5>
+                                            <p className="text-xs text-zinc-400 line-clamp-2 mt-0.5 min-h-[2rem] font-sans">{g.description || "Aucune description fournie."}</p>
+                                          </div>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                          {/* Target Details */}
+                                          <div className="flex justify-between items-end">
+                                            <div className="space-y-0.5">
+                                              <span className="text-[9px] font-black tracking-widest text-zinc-400 uppercase">Cible</span>
+                                              <h6 className="font-mono text-sm font-bold text-zinc-950">{goalAmt.toLocaleString("fr-FR")} DH</h6>
+                                            </div>
+                                            <div className="text-right space-y-0.5">
+                                              <span className="text-[9px] font-black tracking-widest text-zinc-400 uppercase">Progression</span>
+                                              <h6 className="font-mono text-sm font-bold text-primary">{pct}%</h6>
+                                            </div>
+                                          </div>
+
+                                          {/* Progress Bar Container */}
+                                          <div className="h-2 w-full bg-zinc-100 rounded-full overflow-hidden">
+                                            <div 
+                                              className={`h-full transition-all duration-1000 ${isReached ? 'bg-emerald-500' : 'bg-primary'}`} 
+                                              style={{ width: `${pct}%` }}
+                                            />
+                                          </div>
+
+                                          {/* Mini Status info */}
+                                          <p className="text-[10px] text-zinc-400 font-sans">
+                                            {isReached 
+                                              ? "Félicitations ! Objectif validé avec succès." 
+                                              : `Il manque ${(goalAmt - currentBalance).toLocaleString("fr-FR")} DH.`}
+                                          </p>
+                                        </div>
+
+                                        {/* Actions */}
+                                        <div className="border-t border-zinc-100 pt-4 flex items-center justify-between gap-2">
+                                          <div className="flex items-center gap-2">
+                                            <button
+                                              id={`btn-edit-goal-${g.id}`}
+                                              onClick={() => {
+                                                setGoalForm({
+                                                  title: g.title || "",
+                                                  amount: String(g.amount || ""),
+                                                  description: g.description || ""
+                                                });
+                                                setShowEditGoalModal(g);
+                                              }}
+                                              className="px-4 py-2 bg-zinc-50 hover:bg-zinc-100 border border-zinc-100 rounded-xl text-xs font-bold text-zinc-700 transition-all flex items-center gap-1.5 font-sans"
+                                            >
+                                              Modifier
+                                            </button>
+                                            
+                                            {/* Order adjusters */}
+                                            <div className="flex items-center gap-1">
+                                              <button 
+                                                onClick={() => handleMoveItem("financeGoals", financeGoals, g.id, 'up')}
+                                                disabled={financeGoals.findIndex(f => f.id === g.id) === 0}
+                                                className="p-1.5 border border-zinc-100 rounded-xl text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950 disabled:opacity-30 transition-all bg-white flex items-center justify-center cursor-pointer"
+                                                title="Déplacer vers le haut"
+                                              >
+                                                <ChevronRight className="rotate-[-90deg]" size={12} />
+                                              </button>
+                                              <button 
+                                                onClick={() => handleMoveItem("financeGoals", financeGoals, g.id, 'down')}
+                                                disabled={financeGoals.findIndex(f => f.id === g.id) === financeGoals.length - 1}
+                                                className="p-1.5 border border-zinc-100 rounded-xl text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950 disabled:opacity-30 transition-all bg-white flex items-center justify-center cursor-pointer"
+                                                title="Déplacer vers le bas"
+                                              >
+                                                <ChevronRight className="rotate-[90deg]" size={12} />
+                                              </button>
+                                            </div>
+                                          </div>
+                                          {deleteConfirmGoalId === g.id ? (
+                                            <div className="flex items-center gap-1.5 animate-fade-in">
+                                              <button
+                                                id={`btn-confirm-delete-goal-${g.id}`}
+                                                onClick={() => {
+                                                  handleDeleteGoal(g.id);
+                                                  setDeleteConfirmGoalId(null);
+                                                }}
+                                                className="px-3 py-1.5 bg-rose-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-rose-700 transition-colors font-sans cursor-pointer"
+                                                title="Confirmer la suppression"
+                                              >
+                                                Sûr ?
+                                              </button>
+                                              <button
+                                                onClick={() => setDeleteConfirmGoalId(null)}
+                                                className="px-3 py-1.5 bg-zinc-100 text-zinc-600 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-zinc-200 transition-colors font-sans cursor-pointer"
+                                              >
+                                                Non
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              id={`btn-delete-goal-${g.id}`}
+                                              onClick={() => {
+                                                setDeleteConfirmGoalId(g.id);
+                                              }}
+                                              className="p-2 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all h-9 w-9 flex items-center justify-center border border-zinc-100 cursor-pointer"
+                                              title="Supprimer l'objectif"
+                                            >
+                                              <Trash2 size={16} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {activeTab === "agenda" && user && (
+                  <div className="space-y-12 animate-fade-in pb-16">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-2 border-b border-zinc-100">
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-[0.4em] text-primary block mb-2 font-mono">WORKSPACE DE L'ÉQUIPE // AGENDA INTERNE</span>
+                        <h2 className="text-4xl md:text-5xl font-black tracking-tighter uppercase text-zinc-950">Agenda & Notes</h2>
+                        <p className="text-zinc-500 text-sm mt-1 font-sans">Planifiez le calendrier de la campagne électorale et collaborez en temps réel</p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-zinc-50 p-4 rounded-2xl border border-zinc-100 font-mono text-xs text-zinc-650">
+                        <div className="flex items-center gap-2">
+                          <Activity size={14} className="text-primary animate-pulse" />
+                          <span className="font-bold uppercase tracking-wider text-[10px] text-zinc-400 font-sans">Statut:</span>
+                          <span className="text-zinc-800 font-bold font-sans">Synchronisé</span>
+                        </div>
+                      </div>
+                    </header>
+
+                    {/* Main Layout Grid */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                      
+                      {/* Left Block: Notion-style Calendar (8 cols) */}
+                      <div className="lg:col-span-8 bg-white border border-zinc-100 rounded-3xl p-6 shadow-sm space-y-6">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-zinc-50 pb-5">
+                          <div>
+                            <h4 className="text-xs font-black tracking-widest text-zinc-400 uppercase font-sans mb-1">Calendrier Interactif</h4>
+                            <h3 className="text-2xl font-black text-zinc-950 font-sans">
+                              {(() => {
+                                const listFR = [
+                                  "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                                  "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+                                ];
+                                return `${listFR[agendaMonth]} ${agendaYear}`;
+                              })()}
+                            </h3>
+                          </div>
+                          <div className="flex items-center gap-1.5 self-stretch sm:self-auto justify-end">
+                            <button
+                              onClick={() => {
+                                const now = new Date();
+                                setAgendaYear(now.getFullYear());
+                                setAgendaMonth(now.getMonth());
+                              }}
+                              className="px-3 py-1.5 bg-zinc-55 border border-zinc-100 rounded-xl text-[10px] font-black uppercase text-zinc-700 tracking-wider hover:bg-zinc-100 transition-all font-sans cursor-pointer mr-2"
+                            >
+                              Aujourd'hui
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (agendaMonth === 0) {
+                                  setAgendaMonth(11);
+                                  setAgendaYear(prev => prev - 1);
+                                } else {
+                                  setAgendaMonth(prev => prev - 1);
+                                }
+                              }}
+                              className="p-2 border border-zinc-100 hover:bg-zinc-100 rounded-xl text-zinc-650 hover:text-zinc-950 transition-colors cursor-pointer"
+                              title="Mois précédent"
+                            >
+                              <ChevronLeft size={16} />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (agendaMonth === 11) {
+                                  setAgendaMonth(0);
+                                  setAgendaYear(prev => prev + 1);
+                                } else {
+                                  setAgendaMonth(prev => prev + 1);
+                                }
+                              }}
+                              className="p-2 border border-zinc-100 hover:bg-zinc-100 rounded-xl text-zinc-650 hover:text-zinc-950 transition-colors cursor-pointer"
+                              title="Mois suivant"
+                            >
+                              <ChevronRight size={16} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Calendar Grid */}
+                        <div className="grid grid-cols-7 gap-2">
+                          {/* Week headers */}
+                          {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((d, i) => (
+                            <div key={i} className="text-center font-bold text-[10px] uppercase tracking-wider text-zinc-400 py-2.5 font-mono border-b border-zinc-50">
+                              {d}
+                            </div>
+                          ))}
+
+                          {(() => {
+                            const daysInMonth = new Date(agendaYear, agendaMonth + 1, 0).getDate();
+                            const rawFirstDayIndex = new Date(agendaYear, agendaMonth, 1).getDay(); // Sunday is 0, Monday is 1...
+                            const startingDayOfWeek = (rawFirstDayIndex === 0 ? 6 : rawFirstDayIndex - 1);
+                            
+                            const emptyDays = Array.from({ length: startingDayOfWeek }).map((_, i) => (
+                              <div key={`empty-${i}`} className="min-h-[100px] bg-zinc-50/20 border border-zinc-50 rounded-2xl opacity-40" />
+                            ));
+                            
+                            const activeDays = Array.from({ length: daysInMonth }).map((_, inx) => {
+                              const dayNum = inx + 1;
+                              const monthStr = String(agendaMonth + 1).padStart(2, '0');
+                              const dayStr = `${agendaYear}-${monthStr}-${String(dayNum).padStart(2, '0')}`;
+                              const dayEvents = agendaEvents.filter(e => e.date === dayStr);
+                              
+                              const isToday = (
+                                new Date().getFullYear() === agendaYear &&
+                                new Date().getMonth() === agendaMonth &&
+                                new Date().getDate() === dayNum
+                              );
+
+                              return (
+                                <div 
+                                  key={inx} 
+                                  onClick={() => {
+                                    setEventForm({ title: "", category: "Réunion", importance: "Moyenne", description: "" });
+                                    setShowAddEventModalDate(dayStr);
+                                  }}
+                                  className={`
+                                    min-h-[100px] p-2 rounded-2xl border transition-all flex flex-col justify-between cursor-pointer group hover:bg-zinc-50/55 hover:border-zinc-200 hover:shadow-sm relative
+                                    ${isToday 
+                                      ? "bg-rose-50/20 border-primary" 
+                                      : "bg-white border-zinc-100"
+                                    }
+                                  `}
+                                >
+                                  {/* Day index number */}
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className={`
+                                      text-[10px] font-mono font-bold w-5 h-5 flex items-center justify-center rounded-full
+                                      ${isToday ? "bg-primary text-white" : "text-zinc-600"}
+                                    `}>
+                                      {dayNum}
+                                    </span>
+                                    <span className="opacity-0 group-hover:opacity-100 transition-opacity text-primary font-black text-xs">
+                                      +
+                                    </span>
+                                  </div>
+
+                                  {/* Stacking day events list */}
+                                  <div className="flex-grow space-y-1 overflow-y-auto max-h-[75px] scrollbar-none" onClick={(e) => e.stopPropagation()}>
+                                    {dayEvents.map((ev) => {
+                                      // Custom class per category card
+                                      const cat = String(ev.category || "").trim().toLowerCase();
+                                      let colClasses = "bg-zinc-100 text-zinc-700 border-zinc-200";
+                                      if (cat === "réunion" || cat === "reunion") colClasses = "bg-blue-50 text-blue-700 border-blue-100";
+                                      else if (cat === "conférence" || cat === "conference") colClasses = "bg-purple-50 text-purple-700 border-purple-100";
+                                      else if (cat === "événement" || cat === "evenement" || cat === "evenement") colClasses = "bg-rose-50 text-rose-700 border-rose-100";
+                                      else if (cat === "visite") colClasses = "bg-emerald-50 text-emerald-700 border-emerald-100";
+                                      else if (cat === "autre") colClasses = "bg-zinc-150 text-zinc-700 border-zinc-200";
+
+                                      return (
+                                        <div
+                                          key={ev.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setEventForm({
+                                              title: ev.title || "",
+                                              category: ev.category || "Réunion",
+                                              importance: ev.importance || "Moyenne",
+                                              description: ev.description || ""
+                                            });
+                                            setShowEventDetails(ev);
+                                          }}
+                                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded-lg border truncate text-left transition-all hover:translate-x-0.5 ${colClasses}`}
+                                          title={`${ev.title} (${ev.category})`}
+                                        >
+                                          {ev.title}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            });
+
+                            return [...emptyDays, ...activeDays];
+                          })()}
+                        </div>
+                        
+                        <div className="flex flex-wrap gap-4 text-[10px] uppercase tracking-widest font-bold text-zinc-400 mt-4 pt-4 border-t border-zinc-50">
+                          <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-blue-100 border border-blue-200 inline-block"></span> Réunion</span>
+                          <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-purple-100 border border-purple-200 inline-block"></span> Conférence</span>
+                          <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-rose-100 border border-rose-200 inline-block"></span> Événement</span>
+                          <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-200 inline-block"></span> Visite</span>
+                          <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-zinc-150 border border-zinc-200 inline-block"></span> Autre</span>
+                        </div>
+                      </div>
+
+                      {/* Right Block: Sticky Post-it Notes Board (4 cols) */}
+                      <div className="lg:col-span-4 space-y-6">
+                        
+                        {/* Note Creator Card */}
+                        <div className="bg-white border border-zinc-100 rounded-3xl p-6 shadow-sm space-y-4">
+                          <h4 className="text-xs font-black tracking-widest text-zinc-400 uppercase font-sans">Créer un Post-it</h4>
+                          <form onSubmit={handleAddAgendaNote} className="space-y-4">
+                            <textarea
+                              value={newNoteText}
+                              onChange={(e) => setNewNoteText(e.target.value)}
+                              placeholder="Écrivez une note de post-it ici..."
+                              className="w-full h-24 p-3.5 text-xs text-zinc-800 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white transition-all resize-none font-sans"
+                            />
+                            
+                            {/* Color Selector */}
+                            <div className="flex flex-col gap-2">
+                              <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest font-sans">Couleur du Post-it</span>
+                              <div className="flex items-center gap-2">
+                                {[
+                                  { id: "yellow", bg: "bg-amber-100 border-amber-250", border: "border-amber-400" },
+                                  { id: "blue", bg: "bg-sky-100 border-sky-250", border: "border-sky-450" },
+                                  { id: "green", bg: "bg-emerald-100 border-emerald-250", border: "border-emerald-400" },
+                                  { id: "pink", bg: "bg-rose-100 border-rose-250", border: "border-rose-400" },
+                                  { id: "purple", bg: "bg-purple-100 border-purple-250", border: "border-purple-400" }
+                                ].map((c) => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => setNewNoteColor(c.id)}
+                                    className={`
+                                      w-6 h-6 rounded-full border transition-all cursor-pointer flex items-center justify-center
+                                      ${c.bg} 
+                                      ${newNoteColor === c.id ? "scale-115 ring-2 ring-primary/45" : "hover:scale-105"}
+                                    `}
+                                  >
+                                    {newNoteColor === c.id && <div className="w-1.5 h-1.5 rounded-full bg-zinc-950/40" />}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <button
+                              type="submit"
+                              disabled={!newNoteText.trim()}
+                              className="w-full py-3 bg-zinc-950 hover:bg-zinc-850 disabled:opacity-40 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all border-none font-sans cursor-pointer"
+                            >
+                              Épingler la note +
+                            </button>
+                          </form>
+                        </div>
+
+                        {/* Sticky Notes Walls */}
+                        <div className="space-y-4 max-h-[500px] overflow-y-auto scrollbar-none pr-1">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-black tracking-widest text-zinc-400 uppercase font-sans">Notes Épinglées ({agendaNotes.length})</h4>
+                          </div>
+
+                          {agendaNotes.length === 0 ? (
+                            <div className="p-8 border border-dashed border-zinc-200 rounded-3xl text-center text-zinc-400 py-12 space-y-1">
+                              <p className="text-xs font-sans font-bold uppercase tracking-wide">Aucune note active</p>
+                              <p className="text-[10px] font-sans">Créez votre premier post-it de brainstorming ci-dessus.</p>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 gap-4">
+                              {agendaNotes.map((note, idx) => {
+                                // Extract styles
+                                let colorClass = "bg-amber-100/90 border-amber-200 text-amber-950 shadow-amber-100/30";
+                                if (note.color === "blue") colorClass = "bg-sky-100/90 border-sky-205 text-sky-950 shadow-sky-100/30";
+                                if (note.color === "green") colorClass = "bg-emerald-100/90 border-emerald-205 text-emerald-950 shadow-emerald-100/30";
+                                if (note.color === "pink") colorClass = "bg-rose-100/90 border-rose-205 text-rose-950 shadow-rose-100/30";
+                                if (note.color === "purple") colorClass = "bg-purple-100/90 border-purple-205 text-purple-950 shadow-purple-100/30";
+
+                                // Subtle rotation index
+                                const rotationDegrees = [
+                                  "rotate-0", "rotate-[-1deg]", "rotate-[1deg]", "rotate-[-1.5deg]", "rotate-[1.5deg]"
+                                ][idx % 5];
+
+                                return (
+                                  <div
+                                    key={note.id}
+                                    className={`
+                                      p-5 rounded-2xl border ${colorClass} ${rotationDegrees} transition-transform hover:rotate-0 hover:scale-[1.01] shadow-md flex flex-col justify-between space-y-4 relative group
+                                    `}
+                                  >
+                                    {/* Virtual Pin */}
+                                    <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 text-zinc-800 opacity-60 drop-shadow flex items-center justify-center">
+                                      <Pin size={16} />
+                                    </div>
+
+                                    {/* Note content */}
+                                    <div className="pt-2">
+                                      <p className="text-xs leading-relaxed whitespace-pre-wrap font-sans font-medium text-inherit">
+                                        {note.text}
+                                      </p>
+                                    </div>
+
+                                    {/* Footer with date-tracker & delete trigger */}
+                                    <div className="flex justify-between items-end border-t border-black/5 pt-3">
+                                      <span className="text-[8px] font-bold text-black/40 uppercase tracking-widest font-mono">
+                                        {note.dateStr || "Enregistré"}
+                                      </span>
+                                      
+                                      <button
+                                        onClick={() => handleDeleteAgendaNote(note.id)}
+                                        className="p-1 px-1.5 hover:bg-black/5 rounded text-black/40 hover:text-rose-700 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+                                        title="Retirer la note"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+
+                    </div>
+
+                    {/* MODAL 1: ADD EVENT MODAL */}
+                    {showAddEventModalDate && (
+                      <div className="fixed inset-0 bg-zinc-950/60 flex items-center justify-center z-[110] p-4 backdrop-blur-xs">
+                        <div className="w-full max-w-md bg-white border border-zinc-100 rounded-3xl p-8 shadow-2xl relative animate-scale-up space-y-6">
+                          <header className="border-b border-zinc-50 pb-4">
+                            <span className="text-[10px] font-black uppercase tracking-[0.25em] text-primary">AGENDA // REUNIONS</span>
+                            <h3 className="text-2xl font-black uppercase tracking-tight text-zinc-950 mt-1">Créer un événement</h3>
+                            <p className="text-xs text-zinc-400 mt-1.5 font-sans">
+                              Sélectionné: <strong className="text-zinc-650 font-mono font-bold">
+                                {(() => {
+                                  const parts = showAddEventModalDate.split("-");
+                                  if (parts.length === 3) {
+                                    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+                                  }
+                                  return showAddEventModalDate;
+                                })()}
+                              </strong>
+                            </p>
+                          </header>
+
+                          <form onSubmit={handleAddAgendaEvent} className="space-y-5">
+                            {/* Title */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Titre de l'événement *</label>
+                              <input
+                                type="text"
+                                required
+                                value={eventForm.title}
+                                onChange={(e) => setEventForm(prev => ({ ...prev, title: e.target.value }))}
+                                placeholder="Ex: Réunion de coordination"
+                                className="w-full p-3.5 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary text-xs font-sans font-semibold text-zinc-850"
+                              />
+                            </div>
+
+                            {/* Category selector */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Catégorie *</label>
+                              <select
+                                value={eventForm.category}
+                                onChange={(e) => setEventForm(prev => ({ ...prev, category: e.target.value }))}
+                                className="w-full p-3.5 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary text-xs font-sans font-semibold text-zinc-850"
+                              >
+                                {["Réunion", "Conférence", "Événement", "Visite", "Autre"].map(cat => (
+                                  <option key={cat} value={cat}>{cat}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {/* Importance selector */}
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Degré d'importance *</label>
+                              <div className="grid grid-cols-3 gap-3">
+                                {["Basse", "Moyenne", "Haute"].map(imp => (
+                                  <button
+                                    key={imp}
+                                    type="button"
+                                    onClick={() => setEventForm(prev => ({ ...prev, importance: imp }))}
+                                    className={`
+                                      py-2.5 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer font-sans
+                                      ${eventForm.importance === imp
+                                        ? "bg-zinc-950 text-white border-zinc-950 font-bold"
+                                        : "bg-white text-zinc-505 hover:bg-zinc-50 border-zinc-150"
+                                      }
+                                    `}
+                                  >
+                                    {imp}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Optional description */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Description facultative</label>
+                              <textarea
+                                value={eventForm.description}
+                                onChange={(e) => setEventForm(prev => ({ ...prev, description: e.target.value }))}
+                                placeholder="Précisez l'ordre du jour, participants ou lieux..."
+                                className="w-full h-24 p-3.5 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary text-xs font-sans leading-relaxed resize-none"
+                              />
+                            </div>
+
+                            {/* Footer triggers */}
+                            <div className="flex gap-3 border-t border-zinc-55 pt-5">
+                              <button
+                                type="button"
+                                onClick={() => setShowAddEventModalDate(null)}
+                                className="flex-1 py-4 text-zinc-400 font-bold uppercase text-[10px] tracking-widest hover:text-zinc-800 transition-colors bg-transparent border border-transparent font-sans cursor-pointer"
+                              >
+                                Annuler
+                              </button>
+                              <button
+                                type="submit"
+                                className="flex-1 py-4 bg-primary text-white rounded-xl font-bold uppercase tracking-widest text-[10px] hover:bg-opacity-95 shadow-lg shadow-zinc-200 transition-all border-none font-sans cursor-pointer"
+                              >
+                                Enregistrer
+                              </button>
+                            </div>
+                          </form>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* MODAL 2: VIEW / INTERACTIVE EDIT & DELETE EVENT */}
+                    {showEventDetails && (
+                      <div className="fixed inset-0 bg-zinc-950/60 flex items-center justify-center z-[110] p-4 backdrop-blur-xs">
+                        <div className="w-full max-w-md bg-white border border-zinc-100 rounded-3xl p-8 shadow-2xl relative animate-scale-up space-y-6">
+                          
+                          {/* Close button */}
+                          <button 
+                            onClick={() => setShowEventDetails(null)}
+                            className="absolute top-6 right-6 p-2 text-zinc-350 hover:text-zinc-650 hover:bg-zinc-50 rounded-xl transition-all cursor-pointer"
+                          >
+                            <X size={16} />
+                          </button>
+
+                          <header className="border-b border-zinc-55 pb-4">
+                            <span className="text-[10px] font-black uppercase tracking-[0.25em] text-primary">AGENDA // DETAIL</span>
+                            <h3 className="text-2xl font-black text-zinc-900 mt-1 font-sans">
+                              {isEditingEvent ? "Modifier l'événement" : showEventDetails.title}
+                            </h3>
+                            <p className="text-[10px] font-mono text-zinc-400 font-black tracking-widest mt-1 uppercase">
+                              Date : {(() => {
+                                const parts = showEventDetails.date.split("-");
+                                return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : showEventDetails.date;
+                              })()}
+                            </p>
+                          </header>
+
+                          {isEditingEvent ? (
+                            <form 
+                              onSubmit={async (e) => {
+                                e.preventDefault();
+                                try {
+                                  await updateDoc(doc(db, "agendaEvents", showEventDetails.id), {
+                                    title: eventForm.title.trim() || "Sans titre",
+                                    category: eventForm.category,
+                                    importance: eventForm.importance,
+                                    description: eventForm.description.trim()
+                                  });
+                                  setShowEventDetails(null);
+                                } catch (err) {
+                                  handleFirestoreError(err, OperationType.WRITE, `agendaEvents/${showEventDetails.id}`);
+                                }
+                              }} 
+                              className="space-y-4"
+                            >
+                              {/* Title */}
+                              <div className="space-y-1.5">
+                                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Titre de l'événement *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={eventForm.title}
+                                  onChange={(e) => setEventForm(prev => ({ ...prev, title: e.target.value }))}
+                                  placeholder="Entrez le titre"
+                                  className="w-full p-3 bg-zinc-50 border border-zinc-150 rounded-xl outline-none focus:border-primary text-xs font-sans font-semibold text-zinc-850"
+                                />
+                              </div>
+
+                              {/* Category */}
+                              <div className="space-y-1.5">
+                                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Catégorie *</label>
+                                <select
+                                  value={eventForm.category}
+                                  onChange={(e) => setEventForm(prev => ({ ...prev, category: e.target.value }))}
+                                  className="w-full p-3 bg-zinc-50 border border-zinc-150 rounded-xl outline-none focus:border-primary text-xs font-sans font-semibold text-zinc-850"
+                                >
+                                  {["Réunion", "Conférence", "Événement", "Visite", "Autre"].map(cat => (
+                                    <option key={cat} value={cat}>{cat}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {/* Importance */}
+                              <div className="space-y-1.5">
+                                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Importance *</label>
+                                <select
+                                  value={eventForm.importance}
+                                  onChange={(e) => setEventForm(prev => ({ ...prev, importance: e.target.value }))}
+                                  className="w-full p-3 bg-zinc-50 border border-zinc-150 rounded-xl outline-none focus:border-primary text-xs font-sans font-semibold text-zinc-850"
+                                >
+                                  {["Basse", "Moyenne", "Haute"].map(imp => (
+                                    <option key={imp} value={imp}>{imp}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {/* Description */}
+                              <div className="space-y-1.5">
+                                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Description</label>
+                                <textarea
+                                  value={eventForm.description}
+                                  onChange={(e) => setEventForm(prev => ({ ...prev, description: e.target.value }))}
+                                  placeholder="Détails additionnels..."
+                                  className="w-full h-24 p-3 bg-zinc-50 border border-zinc-150 rounded-xl outline-none focus:border-primary text-xs font-sans leading-relaxed resize-none"
+                                />
+                              </div>
+
+                              <div className="flex gap-2 border-t border-zinc-55 pt-4">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsEditingEvent(false)}
+                                  className="flex-1 py-2.5 text-zinc-450 font-bold uppercase text-[10px] tracking-widest hover:text-zinc-805 transition-colors bg-transparent border border-transparent font-sans cursor-pointer"
+                                >
+                                  Retour
+                                </button>
+                                <button
+                                  type="submit"
+                                  className="flex-1 py-2.5 bg-primary hover:bg-opacity-90 text-white rounded-xl font-bold uppercase tracking-widest text-[10px] shadow-sm transition-all border-none font-sans cursor-pointer"
+                                >
+                                  Sauvegarder
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="space-y-6">
+                              <div className="space-y-4">
+                                <div className="flex flex-wrap gap-2">
+                                  {/* Category Badge */}
+                                  <span className="px-2.5 py-1 text-[10px] font-black uppercase tracking-wider bg-zinc-50 border border-zinc-150 rounded-xl font-sans text-zinc-600">
+                                    {showEventDetails.category}
+                                  </span>
+
+                                  {/* Importance Badge */}
+                                  <span className={`
+                                    px-2.5 py-1 text-[10px] font-black uppercase tracking-wider border rounded-xl font-sans
+                                    ${showEventDetails.importance === "Haute" 
+                                      ? "bg-rose-50 text-rose-600 border-rose-100" 
+                                      : showEventDetails.importance === "Moyenne" 
+                                        ? "bg-amber-50 text-amber-600 border-amber-150" 
+                                        : "bg-blue-50 text-blue-600 border-blue-100"
+                                    }
+                                  `}>
+                                    Priorité: {showEventDetails.importance || "Moyenne"}
+                                  </span>
+                                </div>
+
+                                <div className="space-y-1">
+                                  <h5 className="text-[10px] font-black uppercase tracking-wider text-zinc-400 font-sans">Description contextuelle</h5>
+                                  <div className="bg-zinc-50/50 p-4 border border-zinc-100 rounded-2xl min-h-[60px]">
+                                    <p className="text-xs text-zinc-700 leading-relaxed font-sans font-medium whitespace-pre-wrap">
+                                      {showEventDetails.description || "Aucune description fournie pour cet événement."}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {deleteConfirmEvent ? (
+                                <div className="animate-fade-in bg-rose-50 border border-rose-100 rounded-2xl p-4 space-y-3">
+                                  <p className="text-xs font-bold text-rose-800 font-sans uppercase">Êtes-vous sûr de vouloir supprimer cet événement ?</p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => handleDeleteAgendaEvent(showEventDetails.id)}
+                                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-750 text-white rounded-lg text-[10px] font-black uppercase tracking-wider cursor-pointer"
+                                    >
+                                      Oui, Supprimer
+                                    </button>
+                                    <button
+                                      onClick={() => setDeleteConfirmEvent(false)}
+                                      className="px-3 py-1.5 bg-zinc-105 text-zinc-605 rounded-lg text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+                                    >
+                                      Annuler
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <footer className="flex gap-2 border-t border-zinc-55 pt-5 justify-between">
+                                  <button
+                                    onClick={() => setDeleteConfirmEvent(true)}
+                                    className="p-3 bg-rose-50 hover:bg-rose-100 border border-rose-105 text-rose-600 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                                    title="Supprimer l'événement"
+                                  >
+                                    <Trash2 size={16} />
+                                    <span className="text-[10px] font-black uppercase font-sans">Supprimer</span>
+                                  </button>
+                                  
+                                  <button
+                                    onClick={() => {
+                                      // Pre-fill fields for editing
+                                      setEventForm({
+                                        title: showEventDetails.title || "",
+                                        category: showEventDetails.category || "Réunion",
+                                        importance: showEventDetails.importance || "Moyenne",
+                                        description: showEventDetails.description || ""
+                                      });
+                                      setIsEditingEvent(true);
+                                    }}
+                                    className="px-6 py-3 bg-zinc-950 hover:bg-zinc-850 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all font-sans cursor-pointer"
+                                  >
+                                    Modifier les infos
+                                  </button>
+                                </footer>
+                              )}
+                            </div>
+                          )}
+
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                )}
               </motion.div>
             </AnimatePresence>
           </div>
@@ -1088,6 +3198,502 @@ export default function App() {
                   <button type="button" onClick={() => setShowAddForm("none")} className="flex-1 py-4 text-zinc-400 font-bold uppercase text-[10px] tracking-widest">Annuler</button>
                   <button type="submit" disabled={formLoading} className="flex-1 py-4 bg-primary text-white rounded-lg font-bold uppercase text-[10px] tracking-widest disabled:opacity-50">
                     {formLoading ? "Enregistrement..." : "Enregistrer"}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Treasury: Ajouter de l'argent (Income) Modal */}
+      <AnimatePresence>
+        {showAddIncomeModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 text-left">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAddIncomeModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-lg bg-white p-10 rounded-3xl shadow-2xl overflow-y-auto max-h-[90vh] space-y-8 animate-fade-in"
+            >
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-[0.25em] text-primary">TRESORERIE // ENREGISTRER</span>
+                <h3 className="text-3xl font-black uppercase tracking-tight text-zinc-950 mt-1">Ajouter de l'argent</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">Ajouter une nouvelle recette ou versement de sponsor</p>
+              </div>
+
+              <form onSubmit={handleSaveIncome} className="space-y-5">
+                {/* Montant */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Montant du versement (DH) *</label>
+                  <input 
+                    required 
+                    type="number" 
+                    step="0.01"
+                    min="0.01"
+                    placeholder="ex: 12500" 
+                    value={incomeForm.amount}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val.includes("-")) return;
+                      setIncomeForm({...incomeForm, amount: val});
+                    }}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Source */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Source du revenu / Payeur *</label>
+                  <input 
+                    required 
+                    placeholder="ex: Bureau du Secrétariat, Partenaire UM6P..." 
+                    value={incomeForm.source}
+                    onChange={e => setIncomeForm({...incomeForm, source: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Category */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Catégorie *</label>
+                    <select
+                      value={incomeForm.category}
+                      onChange={e => setIncomeForm({...incomeForm, category: e.target.value})}
+                      className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm font-bold"
+                    >
+                      <option value="Sponsoring">Sponsoring</option>
+                      <option value="Cotisation">Cotisation</option>
+                      <option value="Subvention">Subvention</option>
+                      <option value="Partenariat">Partenariat</option>
+                      <option value="Billetterie">Billetterie</option>
+                      <option value="Autre">Autre</option>
+                    </select>
+                  </div>
+
+                  {/* Date */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Date *</label>
+                    <input 
+                      required 
+                      type="datetime-local" 
+                      value={incomeForm.date}
+                      onChange={e => setIncomeForm({...incomeForm, date: e.target.value})}
+                      className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-xs font-bold"
+                    />
+                  </div>
+                </div>
+
+                {/* Motif / Description */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Description / Motif détaillé *</label>
+                  <textarea 
+                    required 
+                    placeholder="ex: Contrat de sponsoring Or - Campagne d'ouverture de l'édition 2026..." 
+                    rows={3} 
+                    value={incomeForm.description}
+                    onChange={e => setIncomeForm({...incomeForm, description: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Facture Attachment URL or File dropping zone */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Lien du justificatif (Optionnel)</label>
+                  <input 
+                    placeholder="Saisissez ou collez un lien Google Drive" 
+                    value={incomeForm.attachmentUrl}
+                    onChange={e => setIncomeForm({...incomeForm, attachmentUrl: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-xs font-mono"
+                  />
+                  
+                  {/* Dropzone visual selector */}
+                  <div 
+                    className="border-2 border-dashed border-zinc-200 p-6 rounded-2xl text-center hover:border-primary hover:bg-zinc-50/50 transition-all cursor-pointer"
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => {
+                      e.preventDefault();
+                      const file = e.dataTransfer.files[0];
+                      if (file) {
+                        setIncomeForm({
+                          ...incomeForm,
+                          attachmentUrl: `https://drive.google.com/file/d/simulated-${Date.now()}`
+                        });
+                      }
+                    }}
+                  >
+                    <Upload className="mx-auto text-zinc-400 mb-2" size={20} />
+                    <p className="text-[11px] text-zinc-500 font-medium font-sans">Glissez et déposez un fichier ici ou cliquez pour simuler l'import</p>
+                    <p className="text-[9px] text-zinc-400 font-mono mt-1">Accepte les PDF, JPG ou PNG comptables</p>
+                  </div>
+                </div>
+
+                <div className="pt-4 flex gap-4">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowAddIncomeModal(false)} 
+                    className="flex-1 py-4 text-zinc-400 font-bold uppercase text-[10px] tracking-widest hover:text-zinc-900 transition-colors bg-transparent border border-transparent"
+                  >
+                    Annuler
+                  </button>
+                  <button 
+                    type="submit" 
+                    disabled={financeSubmitting} 
+                    className="flex-1 py-4 bg-primary text-white rounded-xl font-bold uppercase text-[10px] tracking-widest disabled:opacity-50 hover:bg-opacity-95 shadow-lg shadow-zinc-200 transition-all border-none cursor-pointer"
+                  >
+                    {financeSubmitting ? "Enregistrement..." : "Confirmer"}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Treasury: Retirer de l'argent (Expense) Modal */}
+      <AnimatePresence>
+        {showAddExpenseModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 text-left">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAddExpenseModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-lg bg-white p-10 rounded-3xl shadow-2xl overflow-y-auto max-h-[90vh] space-y-8 animate-fade-in"
+            >
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-500">TRESORERIE // RETRAIT</span>
+                <h3 className="text-3xl font-black uppercase tracking-tight text-zinc-950 mt-1">Retirer de l'argent</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">Autoriser ou enregistrer un décaissement de fonds</p>
+              </div>
+
+              <form onSubmit={handleSaveExpense} className="space-y-5">
+                {/* Montant */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-rose-500 block">Montant de la dépense (DH) *</label>
+                  <input 
+                    required 
+                    type="number" 
+                    step="0.01"
+                    min="0.01"
+                    placeholder="ex: 2300" 
+                    value={expenseForm.amount}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val.includes("-")) return;
+                      setExpenseForm({...expenseForm, amount: val});
+                    }}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-rose-400 focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Responsable */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Responsable de l'achat *</label>
+                  <input 
+                    required 
+                    placeholder="ex: Soraya Meziane, Équipe logistique..." 
+                    value={expenseForm.responsible}
+                    onChange={e => setExpenseForm({...expenseForm, responsible: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Category */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Catégorie d'usage *</label>
+                    <select
+                      value={expenseForm.category}
+                      onChange={e => setExpenseForm({...expenseForm, category: e.target.value})}
+                      className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm font-bold"
+                    >
+                      <option value="Événement">Événement</option>
+                      <option value="Communication">Communication</option>
+                      <option value="Logistique">Logistique</option>
+                      <option value="Restauration">Restauration</option>
+                      <option value="Transport">Transport</option>
+                      <option value="Impression">Impression</option>
+                      <option value="Remboursement">Remboursement</option>
+                      <option value="Autre">Autre</option>
+                    </select>
+                  </div>
+
+                  {/* Priority level */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Niveau de Priorité *</label>
+                    <select
+                      value={expenseForm.priority}
+                      onChange={e => setExpenseForm({...expenseForm, priority: e.target.value})}
+                      className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm font-bold"
+                    >
+                      <option value="Basse">Priorité Basse</option>
+                      <option value="Moyenne">Priorité Moyenne</option>
+                      <option value="Haute">Priorité Haute</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Date */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Date *</label>
+                  <input 
+                    required 
+                    type="datetime-local" 
+                    value={expenseForm.date}
+                    onChange={e => setExpenseForm({...expenseForm, date: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-xs font-bold"
+                  />
+                </div>
+
+                {/* Motif / Description */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Motif détaillé *</label>
+                  <textarea 
+                    required 
+                    placeholder="ex: Commande de 50 badges nominatifs et 100 étiquettes d'orateur..." 
+                    rows={3} 
+                    value={expenseForm.description}
+                    onChange={e => setExpenseForm({...expenseForm, description: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Attachment File dropzone or input link */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Lien du justificatif Drive (Optionnel)</label>
+                  <input 
+                    placeholder="Saisissez ou collez de Justificatif / Facture" 
+                    value={expenseForm.attachmentUrl}
+                    onChange={e => setExpenseForm({...expenseForm, attachmentUrl: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-xs font-mono"
+                  />
+
+                  {/* Dropzone visual */}
+                  <div 
+                    className="border-2 border-dashed border-zinc-200 p-6 rounded-2xl text-center hover:border-rose-400 hover:bg-zinc-50/50 transition-all cursor-pointer"
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => {
+                      e.preventDefault();
+                      const file = e.dataTransfer.files[0];
+                      if (file) {
+                        setExpenseForm({
+                          ...expenseForm,
+                          attachmentUrl: `https://drive.google.com/file/d/simulated-expense-${Date.now()}`
+                        });
+                      }
+                    }}
+                  >
+                    <Upload className="mx-auto text-zinc-400 mb-2" size={20} />
+                    <p className="text-[11px] text-zinc-500 font-medium font-sans">Glissez et déposez un reçu ici ou cliquez pour simuler l'import</p>
+                    <p className="text-[9px] text-zinc-400 font-mono mt-1">Génère un lien de facture d'achat simulé</p>
+                  </div>
+                </div>
+
+                <div className="pt-4 flex gap-4">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowAddExpenseModal(false)} 
+                    className="flex-1 py-4 text-zinc-400 font-bold uppercase text-[10px] tracking-widest hover:text-zinc-900 transition-colors bg-transparent border border-transparent"
+                  >
+                    Annuler
+                  </button>
+                  <button 
+                    type="submit" 
+                    disabled={financeSubmitting} 
+                    className="flex-1 py-4 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold uppercase text-[10px] tracking-widest disabled:opacity-50 shadow-lg shadow-zinc-200 transition-all border-none cursor-pointer"
+                  >
+                    {financeSubmitting ? "Enregistrement..." : "Autoriser"}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Treasury: Ajouter un Objectif Modal */}
+      <AnimatePresence>
+        {showAddGoalModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 text-left">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAddGoalModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-lg bg-white p-10 rounded-3xl shadow-2xl overflow-y-auto max-h-[90vh] space-y-8 animate-fade-in z-[120]"
+            >
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-[0.25em] text-primary">TRESORERIE // OBJECTIF</span>
+                <h3 className="text-3xl font-black uppercase tracking-tight text-zinc-950 mt-1">Créer un objectif</h3>
+                <p className="text-xs text-zinc-400 mt-0.5 font-sans">Définissez une nouvelle cible de trésorerie nette pour le projet.</p>
+              </div>
+
+              <form onSubmit={handleSaveGoal} className="space-y-5">
+                {/* Titre */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Titre de l'objectif *</label>
+                  <input 
+                    required 
+                    placeholder="ex: Financement principal des délégations" 
+                    value={goalForm.title}
+                    onChange={e => setGoalForm({...goalForm, title: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Cible de financement */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Montant cible (DH) *</label>
+                  <input 
+                    required 
+                    type="number" 
+                    step="0.01"
+                    min="0.01"
+                    placeholder="ex: 25000" 
+                    value={goalForm.amount}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val.includes("-")) return;
+                      setGoalForm({...goalForm, amount: val});
+                    }}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Description */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Description de l'objectif</label>
+                  <textarea 
+                    placeholder="ex: Cap nécessaire pour sécuriser les réservations d'amphithéâtre et cocktail..." 
+                    rows={3} 
+                    value={goalForm.description}
+                    onChange={e => setGoalForm({...goalForm, description: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                <div className="pt-4 flex gap-4">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowAddGoalModal(false)} 
+                    className="flex-1 py-4 text-zinc-400 font-bold uppercase text-[10px] tracking-widest hover:text-zinc-900 transition-colors bg-transparent border border-transparent font-sans"
+                  >
+                    Annuler
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="flex-1 py-4 bg-zinc-950 hover:bg-zinc-800 text-white rounded-xl font-bold uppercase text-[10px] tracking-widest shadow-lg shadow-zinc-200 transition-all border-none cursor-pointer font-sans"
+                  >
+                    Confirmer
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Treasury: Modifier un Objectif Modal */}
+      <AnimatePresence>
+        {showEditGoalModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 text-left">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowEditGoalModal(null)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-lg bg-white p-10 rounded-3xl shadow-2xl overflow-y-auto max-h-[90vh] space-y-8 animate-fade-in z-[120]"
+            >
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-[0.25em] text-primary">TRESORERIE // APPRECIATION</span>
+                <h3 className="text-3xl font-black uppercase tracking-tight text-zinc-950 mt-1 font-sans">Modifier l'objectif</h3>
+                <p className="text-xs text-zinc-400 mt-0.5 font-sans">Ajustez les éléments de cet objectif de financement.</p>
+              </div>
+
+              <form onSubmit={handleUpdateGoal} className="space-y-5">
+                {/* Titre */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Titre de l'objectif *</label>
+                  <input 
+                    required 
+                    placeholder="ex: Financement principal des délégations" 
+                    value={goalForm.title}
+                    onChange={e => setGoalForm({...goalForm, title: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Cible de financement */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Montant cible (DH) *</label>
+                  <input 
+                    required 
+                    type="number" 
+                    step="0.01"
+                    min="0.01"
+                    placeholder="ex: 25000" 
+                    value={goalForm.amount}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val.includes("-")) return;
+                      setGoalForm({...goalForm, amount: val});
+                    }}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                {/* Description */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block font-sans">Description de l'objectif</label>
+                  <textarea 
+                    placeholder="ex: Cap nécessaire pour sécuriser les réservations..." 
+                    rows={3} 
+                    value={goalForm.description}
+                    onChange={e => setGoalForm({...goalForm, description: e.target.value})}
+                    className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white text-sm"
+                  />
+                </div>
+
+                <div className="pt-4 flex gap-4">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowEditGoalModal(null)} 
+                    className="flex-1 py-4 text-zinc-400 font-bold uppercase text-[10px] tracking-widest hover:text-zinc-900 transition-colors bg-transparent border border-transparent font-sans"
+                  >
+                    Annuler
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="flex-1 py-4 bg-zinc-950 hover:bg-zinc-805 text-white rounded-xl font-bold uppercase text-[10px] tracking-widest shadow-lg shadow-zinc-200 transition-all border-none cursor-pointer font-sans"
+                  >
+                    Sauvegarder
                   </button>
                 </div>
               </form>

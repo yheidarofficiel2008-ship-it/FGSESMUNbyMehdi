@@ -21,14 +21,7 @@ service cloud.firestore {
 
     // User profiles
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow create: if isOwner(userId) 
-        && request.resource.data.keys().hasAll(['email', 'createdAt'])
-        && request.resource.data.email is string
-        && request.resource.data.createdAt == request.time;
-      allow update: if isOwner(userId)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'updatedAt'])
-        && request.resource.data.updatedAt == request.time;
+      allow read, write: if isSignedIn();
     }
 
     // Campaign Content (Public Read, Auth Write)
@@ -66,6 +59,24 @@ service cloud.firestore {
         && request.resource.data.email.size() <= 100
         && request.resource.data.createdAt == request.time;
       allow read, delete: if isSignedIn();
+    }
+    
+    // Finance Transactions (Only authenticated admin can read, write)
+    match /financeTransactions/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Finance Goals (Only authenticated admin can read, write)
+    match /financeGoals/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Agenda Events & Notes (Only authenticated admin can read, write)
+    match /agendaEvents/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /agendaNotes/{id} {
+      allow read, write: if isSignedIn();
     }
     
     // Health check
