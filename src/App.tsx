@@ -86,6 +86,9 @@ import {
   updateDoc
 } from "firebase/firestore";
 import { auth, db } from "./lib/firebase";
+import { getApps, initializeApp as initSecondaryApp } from "firebase/app";
+import { getAuth as getSecondaryAuth, createUserWithEmailAndPassword as createSecondaryUser, signOut as signOutSecondary } from "firebase/auth";
+import firebaseConfig from "../firebase-applet-config.json";
 
 enum OperationType {
   CREATE = 'create',
@@ -331,8 +334,67 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
+  // Access and Accounts Management state
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [newUserPrefix, setNewUserPrefix] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [isCreatingUserLoading, setIsCreatingUserLoading] = useState(false);
+  const [newUserPerms, setNewUserPerms] = useState({
+    canModifyHome: false,
+    canModifyProgramme: false,
+    canModifyConferences: false,
+    canModifyEquipe: false,
+    canViewSoutiens: false,
+    canModifySoutiens: false,
+    canViewTresorerie: false,
+    canModifyTresorerie: false,
+    canViewAgenda: false,
+    canModifyAgenda: false,
+    canViewAccounts: false,
+    canModifyAccounts: false,
+  });
+
+  const [systemUsers, setSystemUsers] = useState<any[]>([]);
+  const [userProfileSearch, setUserProfileSearch] = useState("");
+  const [selectedUserForEdit, setSelectedUserForEdit] = useState<any | null>(null);
+  const [editingPermissions, setEditingPermissions] = useState<any>({});
+  const [isUpdatingUserPermissions, setIsUpdatingUserPermissions] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<any | null>(null);
+  const [isDeletingTeammate, setIsDeletingTeammate] = useState(false);
+
+  // Teammate direct creation states
+  const [newTeammateEmail, setNewTeammateEmail] = useState("");
+  const [newTeammateName, setNewTeammateName] = useState("");
+  const [newTeammatePassword, setNewTeammatePassword] = useState("");
+  const [newTeammateRole, setNewTeammateRole] = useState("user");
+  const [newTeammatePermissions, setNewTeammatePermissions] = useState({
+    canModifyHome: true,
+    canModifyProgramme: true,
+    canModifyConferences: true,
+    canModifyEquipe: true,
+    canViewSoutiens: true,
+    canModifySoutiens: true,
+    canViewTresorerie: true,
+    canModifyTresorerie: true,
+    canViewAgenda: true,
+    canModifyAgenda: true,
+    canViewAccounts: true,
+    canModifyAccounts: true,
+  });
+  const [isCreatingTeammate, setIsCreatingTeammate] = useState(false);
+  const [creationError, setCreationError] = useState("");
+  const [creationSuccess, setCreationSuccess] = useState("");
+
+  const checkPermission = (perm: string): boolean => {
+    if (!user) return false;
+    if (user.email === "admin@fgses.mun") return true; // Sovereign bypass
+    if (!userProfile) return false;
+    return !!userProfile[perm];
+  };
+
   useEffect(() => {
     setPersistence(auth, browserLocalPersistence);
+    let unsubProfile: (() => void) | null = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
@@ -342,21 +404,42 @@ export default function App() {
           setDbStatus("connected");
 
           const userRef = doc(db, "users", firebaseUser.uid);
-          const userDoc = await getDoc(userRef);
-          if (!userDoc.exists()) {
-            await setDoc(userRef, {
-              email: firebaseUser.email,
-              displayName: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
-              role: "user",
-              createdAt: serverTimestamp(),
-            });
-          }
+          unsubProfile = onSnapshot(userRef, async (snap) => {
+            if (snap.exists()) {
+              setUserProfile(snap.data());
+            } else {
+              const defaultProfile = {
+                email: firebaseUser.email,
+                displayName: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
+                role: firebaseUser.email === "admin@fgses.mun" ? "admin" : "user",
+                createdAt: serverTimestamp(),
+                canModifyHome: firebaseUser.email === "admin@fgses.mun",
+                canModifyProgramme: firebaseUser.email === "admin@fgses.mun",
+                canModifyConferences: firebaseUser.email === "admin@fgses.mun",
+                canModifyEquipe: firebaseUser.email === "admin@fgses.mun",
+                canViewSoutiens: firebaseUser.email === "admin@fgses.mun",
+                canModifySoutiens: firebaseUser.email === "admin@fgses.mun",
+                canViewTresorerie: firebaseUser.email === "admin@fgses.mun",
+                canModifyTresorerie: firebaseUser.email === "admin@fgses.mun",
+                canViewAgenda: firebaseUser.email === "admin@fgses.mun",
+                canModifyAgenda: firebaseUser.email === "admin@fgses.mun",
+                canViewAccounts: firebaseUser.email === "admin@fgses.mun",
+                canModifyAccounts: firebaseUser.email === "admin@fgses.mun",
+              };
+              await setDoc(userRef, defaultProfile);
+              setUserProfile(defaultProfile);
+            }
+          });
         } catch (err) {
           console.error("Database status error:", err);
           setDbStatus("error");
         }
       } else {
-        // Still try a health check even if not logged in
+        setUserProfile(null);
+        if (unsubProfile) {
+          unsubProfile();
+          unsubProfile = null;
+        }
         getDocFromServer(doc(db, "system", "health"))
           .then(() => setDbStatus("connected"))
           .catch(() => setDbStatus("error"));
@@ -364,7 +447,10 @@ export default function App() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (unsubProfile) unsubProfile();
+    };
   }, []);
 
   // Fetch Campaign Data
@@ -506,6 +592,22 @@ export default function App() {
     return () => unsubNotes();
   }, [user]);
 
+  // Fetch System Users (Admin only)
+  useEffect(() => {
+    if (!user || !checkPermission("canViewAccounts")) {
+      setSystemUsers([]);
+      return;
+    }
+
+    const qUsers = query(collection(db, "users"));
+    const unsubUsers = onSnapshot(qUsers, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setSystemUsers(items);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "users"));
+
+    return () => unsubUsers();
+  }, [user, userProfile]);
+
   const handleAddItem = async (e: FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -544,6 +646,16 @@ export default function App() {
 
   const handleDeleteItem = async (col: string, id: string) => {
     if (!user) return;
+    
+    // Check collection permissions before deleting
+    if (col === "supporters" && !checkPermission("canModifySoutiens")) return;
+    if ((col === "financeTransactions" || col === "financeGoals") && !checkPermission("canModifyTresorerie")) return;
+    if (col === "homeBlocks" && !checkPermission("canModifyHome")) return;
+    if (col === "programmeSections" && !checkPermission("canModifyProgramme")) return;
+    if (col === "conferences" && !checkPermission("canModifyConferences")) return;
+    if (col === "teamMembers" && !checkPermission("canModifyEquipe")) return;
+    if (col === "agendaEvents" && !checkPermission("canModifyAgenda")) return;
+
     try {
       await deleteDoc(doc(db, col, id));
     } catch (err) {
@@ -552,6 +664,17 @@ export default function App() {
   };
 
   const handleMoveItem = async (col: string, items: any[], id: string, direction: 'up' | 'down') => {
+    if (!user) return;
+    
+    // Check collection permissions before reordering
+    if (col === "supporters" && !checkPermission("canModifySoutiens")) return;
+    if ((col === "financeTransactions" || col === "financeGoals") && !checkPermission("canModifyTresorerie")) return;
+    if (col === "homeBlocks" && !checkPermission("canModifyHome")) return;
+    if (col === "programmeSections" && !checkPermission("canModifyProgramme")) return;
+    if (col === "conferences" && !checkPermission("canModifyConferences")) return;
+    if (col === "teamMembers" && !checkPermission("canModifyEquipe")) return;
+    if (col === "agendaEvents" && !checkPermission("canModifyAgenda")) return;
+
     const index = items.findIndex(m => m.id === id);
     if (index === -1) return;
     if (direction === 'up' && index === 0) return;
@@ -659,7 +782,7 @@ export default function App() {
 
   const handleSaveIncome = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!checkPermission("canModifyTresorerie")) return;
     const amt = parseFloat(incomeForm.amount) || 0;
     if (amt <= 0) {
       return;
@@ -697,7 +820,7 @@ export default function App() {
 
   const handleSaveExpense = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!checkPermission("canModifyTresorerie")) return;
     const amt = parseFloat(expenseForm.amount) || 0;
     if (amt <= 0) {
       return;
@@ -763,7 +886,7 @@ export default function App() {
   };
 
   const toggleTransactionFavorite = async (id: string, current: boolean) => {
-    if (!user) return;
+    if (!checkPermission("canModifyTresorerie")) return;
     try {
       await updateDoc(doc(db, "financeTransactions", id), { favorite: !current });
     } catch (err) {
@@ -772,7 +895,7 @@ export default function App() {
   };
 
   const toggleTransactionArchived = async (id: string, current: boolean) => {
-    if (!user) return;
+    if (!checkPermission("canModifyTresorerie")) return;
     try {
       await updateDoc(doc(db, "financeTransactions", id), { archived: !current });
     } catch (err) {
@@ -782,7 +905,7 @@ export default function App() {
 
   const handleSaveGoal = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!checkPermission("canModifyTresorerie")) return;
     const amountNum = parseFloat(goalForm.amount) || 0;
     if (amountNum <= 0) return;
     try {
@@ -802,7 +925,7 @@ export default function App() {
 
   const handleUpdateGoal = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !showEditGoalModal) return;
+    if (!checkPermission("canModifyTresorerie") || !showEditGoalModal) return;
     const amountNum = parseFloat(goalForm.amount) || 0;
     if (amountNum <= 0) return;
     try {
@@ -819,7 +942,7 @@ export default function App() {
   };
 
   const handleDeleteGoal = async (id: string) => {
-    if (!user) return;
+    if (!checkPermission("canModifyTresorerie")) return;
     try {
       await deleteDoc(doc(db, "financeGoals", id));
     } catch (err) {
@@ -830,7 +953,7 @@ export default function App() {
   // Agenda CRUD Handlers
   const handleAddAgendaEvent = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !showAddEventModalDate) return;
+    if (!checkPermission("canModifyAgenda") || !showAddEventModalDate) return;
     try {
       await addDoc(collection(db, "agendaEvents"), {
         title: eventForm.title.trim() || "Sans titre",
@@ -853,7 +976,7 @@ export default function App() {
   };
 
   const handleDeleteAgendaEvent = async (id: string) => {
-    if (!user) return;
+    if (!checkPermission("canModifyAgenda")) return;
     try {
       await deleteDoc(doc(db, "agendaEvents", id));
       setShowEventDetails(null);
@@ -864,7 +987,7 @@ export default function App() {
 
   const handleUpdateAgendaEvent = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !showEventDetails) return;
+    if (!checkPermission("canModifyAgenda") || !showEventDetails) return;
     try {
       await updateDoc(doc(db, "agendaEvents", showEventDetails.id), {
         title: eventForm.title.trim() || "Sans titre",
@@ -886,7 +1009,7 @@ export default function App() {
 
   const handleAddAgendaNote = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !newNoteText.trim()) return;
+    if (!checkPermission("canModifyAgenda") || !newNoteText.trim()) return;
     try {
       await addDoc(collection(db, "agendaNotes"), {
         text: newNoteText.trim(),
@@ -907,7 +1030,7 @@ export default function App() {
   };
 
   const handleDeleteAgendaNote = async (id: string) => {
-    if (!user) return;
+    if (!checkPermission("canModifyAgenda")) return;
     try {
       await deleteDoc(doc(db, "agendaNotes", id));
     } catch (err) {
@@ -923,6 +1046,133 @@ export default function App() {
       console.error(err);
     }
   };
+
+  // System Teammate Access CRUD Handlers
+  const handleUpdateTeammatePermissions = async (userId: string, updatedPerms: any, updatedDisplayName?: string, updatedRole?: string) => {
+    if (!checkPermission("canModifyAccounts")) return;
+    setIsUpdatingUserPermissions(true);
+    try {
+      await updateDoc(doc(db, "users", userId), {
+        ...updatedPerms,
+        ...(updatedDisplayName ? { displayName: updatedDisplayName.trim() } : {}),
+        ...(updatedRole ? { role: updatedRole } : {}),
+      });
+      setSelectedUserForEdit(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${userId}`);
+    } finally {
+      setIsUpdatingUserPermissions(false);
+    }
+  };
+
+  const handleDeleteTeammate = async (userId: string) => {
+    if (!checkPermission("canModifyAccounts")) return;
+    if (userId === user?.uid) {
+      return;
+    }
+    setIsDeletingTeammate(true);
+    try {
+      await deleteDoc(doc(db, "users", userId));
+      setUserToDelete(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `users/${userId}`);
+    } finally {
+      setIsDeletingTeammate(false);
+    }
+  };
+
+  const handleCreateTeammateAccount = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!checkPermission("canModifyAccounts")) return;
+    setCreationError("");
+    setCreationSuccess("");
+
+    const email = newTeammateEmail.trim();
+    const displayName = newTeammateName.trim();
+    const password = newTeammatePassword;
+
+    if (!email || !displayName || !password) {
+      setCreationError("Veuillez remplir tous les champs requis.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setCreationError("Le mot de passe doit comporter au moins 6 caractères.");
+      return;
+    }
+
+    setIsCreatingTeammate(true);
+    try {
+      const apps = getApps();
+      const secondaryAppName = "TeammateCreatorApp";
+      let secondaryApp = apps.find(app => app.name === secondaryAppName);
+      if (!secondaryApp) {
+        secondaryApp = initSecondaryApp(firebaseConfig, secondaryAppName);
+      }
+      const secondaryAuth = getSecondaryAuth(secondaryApp);
+      
+      // Create user holding the secondary app auth state safely
+      const userCredential = await createSecondaryUser(secondaryAuth, email, password);
+      const newUid = userCredential.user.uid;
+
+      // Set preconfigured access controls in Firestore for the newly created user
+      await setDoc(doc(db, "users", newUid), {
+        email,
+        displayName,
+        role: newTeammateRole,
+        createdAt: serverTimestamp(),
+        ...newTeammatePermissions,
+      });
+
+      // Clear the secondary user authentication session
+      await signOutSecondary(secondaryAuth);
+
+      // Reset Form fields
+      setNewTeammateEmail("");
+      setNewTeammateName("");
+      setNewTeammatePassword("");
+      setNewTeammateRole("user");
+      setNewTeammatePermissions({
+        canModifyHome: true,
+        canModifyProgramme: true,
+        canModifyConferences: true,
+        canModifyEquipe: true,
+        canViewSoutiens: true,
+        canModifySoutiens: true,
+        canViewTresorerie: true,
+        canModifyTresorerie: true,
+        canViewAgenda: true,
+        canModifyAgenda: true,
+        canViewAccounts: true,
+        canModifyAccounts: true,
+      });
+
+      setCreationSuccess(`Comte créé de manière instantanée pour ${displayName} !`);
+    } catch (err: any) {
+      console.error("Error creating teammate:", err);
+      let errorMsg = "Impossible de créer le compte de collaborateur.";
+      if (err.code === "auth/email-already-in-use") {
+        errorMsg = "Cette adresse e-mail est déjà associée à un compte.";
+      } else if (err.code === "auth/invalid-email") {
+        errorMsg = "L'adresse e-mail saisie n'est pas valide.";
+      } else if (err.code === "auth/weak-password") {
+        errorMsg = "Le mot de passe choisi est trop faible (6 caractères minimum).";
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      setCreationError(errorMsg);
+    } finally {
+      setIsCreatingTeammate(false);
+    }
+  };
+
+  // Active tab fallback safety check
+  useEffect(() => {
+    if (activeTab === "supporters" && !checkPermission("canViewSoutiens")) setActiveTab("home");
+    if (activeTab === "tresorerie" && !checkPermission("canViewTresorerie")) setActiveTab("home");
+    if (activeTab === "agenda" && !checkPermission("canViewAgenda")) setActiveTab("home");
+    if (activeTab === "accounts" && !checkPermission("canViewAccounts")) setActiveTab("home");
+  }, [userProfile, activeTab]);
 
   if (loading) {
     return (
@@ -947,9 +1197,10 @@ export default function App() {
   const activeTabs = [
     ...tabs,
     ...(user ? [
-      { id: "supporters", label: "Soutiens", icon: <Heart size={22} /> },
-      { id: "tresorerie", label: "Trésorerie", icon: <Wallet size={22} /> },
-      { id: "agenda", label: "Agenda", icon: <CalendarDays size={22} /> }
+      ...(checkPermission("canViewSoutiens") ? [{ id: "supporters", label: "Soutiens", icon: <Heart size={22} /> }] : []),
+      ...(checkPermission("canViewTresorerie") ? [{ id: "tresorerie", label: "Trésorerie", icon: <Wallet size={22} /> }] : []),
+      ...(checkPermission("canViewAgenda") ? [{ id: "agenda", label: "Agenda", icon: <CalendarDays size={22} /> }] : []),
+      ...(checkPermission("canViewAccounts") ? [{ id: "accounts", label: "Gestion de compte", icon: <Settings size={22} /> }] : [])
     ] : [])
   ];
 
@@ -1127,7 +1378,7 @@ export default function App() {
                         </p>
                       </div>
                       
-                      {user && (
+                      {checkPermission("canModifyHome") && (
                         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-2">
                           <button 
                             onClick={() => {
@@ -1171,7 +1422,7 @@ export default function App() {
                               </div>
                             )}
                             <div className="p-8 flex flex-col flex-grow relative">
-                              {user && (
+                              {checkPermission("canModifyHome") && (
                                 <div className="absolute top-4 right-12 flex gap-2">
                                   <button 
                                     onClick={(e) => { e.stopPropagation(); handleMoveItem("homepageBlocks", homepageBlocks, block.id, 'up'); }}
@@ -1193,7 +1444,7 @@ export default function App() {
                                 <h3 className="text-2xl font-bold text-primary tracking-tight leading-tight group-hover:text-zinc-900 transition-colors">
                                   {block.title}
                                 </h3>
-                                {user && (
+                                {checkPermission("canModifyHome") && (
                                   <button 
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1228,7 +1479,7 @@ export default function App() {
                         <span className="text-[10px] font-bold uppercase tracking-[0.4em] text-zinc-300 block mb-4 italic">Vision & Actions // 2026</span>
                         <h2 className="text-4xl md:text-6xl font-black tracking-tighter uppercase text-primary">Le Programme</h2>
                       </div>
-                      {user && (
+                      {checkPermission("canModifyProgramme") && (
                         <button 
                           onClick={() => {
                             setFormData({});
@@ -1260,7 +1511,7 @@ export default function App() {
                             <div className={section.imageUrl ? "md:col-span-8" : "md:col-span-12"}>
                               <div className="flex justify-between items-start mb-6">
                                 <div className="flex items-center gap-4">
-                                  {user && (
+                                  {checkPermission("canModifyProgramme") && (
                                     <div className="flex flex-col gap-1">
                                       <button 
                                         onClick={() => handleMoveItem("program", program, section.id, 'up')}
@@ -1280,7 +1531,7 @@ export default function App() {
                                   )}
                                   <h3 className="text-3xl font-bold tracking-tight text-primary">{section.title}</h3>
                                 </div>
-                                {user && (
+                                {checkPermission("canModifyProgramme") && (
                                   <button onClick={() => handleDeleteItem("program", section.id)} className="p-2 text-zinc-300 hover:text-red-500 transition-colors">
                                     <X size={20} />
                                   </button>
@@ -1305,7 +1556,7 @@ export default function App() {
                       <div className="text-center md:text-left">
                         <h2 className="text-4xl md:text-6xl font-black tracking-tighter uppercase text-primary">Nos Conférences</h2>
                       </div>
-                      {user && (
+                      {checkPermission("canModifyConferences") && (
                         <button 
                           onClick={() => {
                             setFormData({});
@@ -1321,19 +1572,19 @@ export default function App() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                       {conferences.map((conf, idx) => (
                         <div key={conf.id} className="bg-white border border-zinc-100 p-6 md:p-10 flex flex-col items-center text-center group hover:border-primary transition-all duration-500 relative shadow-sm hover:shadow-lg rounded-2xl">
-                          {user && (
+                          {checkPermission("canModifyConferences") && (
                             <div className="absolute top-6 left-6 flex gap-2">
                               <button 
                                 onClick={() => handleMoveItem("conferences", conferences, conf.id, 'up')}
                                 disabled={idx === 0}
-                                className="p-1 px-2 border border-zinc-100 rounded text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 bg-white"
+                                className="p-1 px-2 border border-zinc-100 rounded text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 bg-white cursor-pointer"
                               >
                                 ↑
                               </button>
                               <button 
                                 onClick={() => handleMoveItem("conferences", conferences, conf.id, 'down')}
                                 disabled={idx === conferences.length - 1}
-                                className="p-1 px-2 border border-zinc-100 rounded text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 bg-white"
+                                className="p-1 px-2 border border-zinc-100 rounded text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 bg-white cursor-pointer"
                               >
                                 ↓
                               </button>
@@ -1355,8 +1606,8 @@ export default function App() {
                               className="text-sm text-zinc-500 font-serif italic leading-relaxed"
                             />
                           </div>
-                          {user && (
-                            <button onClick={() => handleDeleteItem("conferences", conf.id)} className="absolute top-6 right-6 text-zinc-300 hover:text-red-500 transition-colors">
+                          {checkPermission("canModifyConferences") && (
+                            <button onClick={() => handleDeleteItem("conferences", conf.id)} className="absolute top-6 right-6 text-zinc-300 hover:text-red-500 transition-colors cursor-pointer">
                               <X size={18} />
                             </button>
                           )}
@@ -1373,13 +1624,13 @@ export default function App() {
                         <span className="text-[10px] font-bold uppercase tracking-[0.4em] text-zinc-300 block mb-4 italic">Mehdi_Team // 2026</span>
                         <h2 className="text-4xl md:text-6xl font-black tracking-tighter uppercase text-primary">Notre Équipe</h2>
                       </div>
-                      {user && (
+                      {checkPermission("canModifyEquipe") && (
                         <button 
                           onClick={() => {
                             setFormData({});
                             setShowAddForm("team");
                           }}
-                          className="px-4 py-2 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-lg"
+                          className="px-4 py-2 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-lg cursor-pointer"
                         >
                           Ajouter un membre
                         </button>
@@ -1389,19 +1640,19 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
                       {team.map((member, idx) => (
                         <div key={member.id} className="bg-white p-6 md:p-10 border border-zinc-100 hover:border-primary/30 transition-all duration-500 group relative text-center rounded-3xl shadow-sm">
-                          {user && (
+                          {checkPermission("canModifyEquipe") && (
                             <div className="absolute top-6 left-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button 
                                 onClick={() => handleMoveItem("team", team, member.id, 'up')}
                                 disabled={idx === 0}
-                                className="p-2 border border-zinc-100 rounded-full text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 flex items-center justify-center bg-white shadow-sm"
+                                className="p-2 border border-zinc-100 rounded-full text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 flex items-center justify-center bg-white shadow-sm cursor-pointer"
                               >
                                 <ChevronRight className="rotate-[-90deg]" size={12} />
                               </button>
                               <button 
                                 onClick={() => handleMoveItem("team", team, member.id, 'down')}
                                 disabled={idx === team.length - 1}
-                                className="p-2 border border-zinc-100 rounded-full text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 flex items-center justify-center bg-white shadow-sm"
+                                className="p-2 border border-zinc-100 rounded-full text-[10px] font-bold hover:bg-zinc-50 disabled:opacity-30 flex items-center justify-center bg-white shadow-sm cursor-pointer"
                               >
                                 <ChevronRight className="rotate-[90deg]" size={12} />
                               </button>
@@ -1423,11 +1674,11 @@ export default function App() {
                               className="text-sm text-zinc-500 font-serif italic mb-6 leading-relaxed"
                             />
                           )}
-                          <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400 border-t border-zinc-50 pt-6 cursor-default group-hover:text-primary transition-colors">
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400 border-t border-zinc-50 pt-6 cursor-default group-hover:text-primary transition-colors font-mono">
                             {member.contact}
                           </div>
-                          {user && (
-                            <button onClick={() => handleDeleteItem("team", member.id)} className="absolute top-6 right-6 text-zinc-300 hover:text-red-500 transition-colors">
+                          {checkPermission("canModifyEquipe") && (
+                            <button onClick={() => handleDeleteItem("team", member.id)} className="absolute top-6 right-6 text-zinc-300 hover:text-red-500 transition-colors cursor-pointer">
                               <X size={18} />
                             </button>
                           )}
@@ -1437,7 +1688,7 @@ export default function App() {
                   </div>
                 )}
 
-                {activeTab === "supporters" && user && (
+                {activeTab === "supporters" && checkPermission("canViewSoutiens") && (
                   <div className="space-y-16 animate-fade-in">
                     <header className="flex flex-col md:flex-row justify-between items-center md:items-end gap-6 text-center md:text-left">
                       <div>
@@ -1498,13 +1749,15 @@ export default function App() {
                                     }) : "-"}
                                   </td>
                                   <td className="p-6 text-right">
-                                    <button
-                                      onClick={() => handleDeleteItem("supporters", sup.id)}
-                                      className="p-2 text-zinc-300 hover:text-red-500 hover:bg-red-50/50 rounded-lg transition-all"
-                                      title="Supprimer ce soutien"
-                                    >
-                                      <Trash2 size={16} />
-                                    </button>
+                                    {checkPermission("canModifySoutiens") && (
+                                      <button
+                                        onClick={() => handleDeleteItem("supporters", sup.id)}
+                                        className="p-2 text-zinc-300 hover:text-red-500 hover:bg-red-50/50 rounded-lg transition-all"
+                                        title="Supprimer ce soutien"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    )}
                                   </td>
                                 </tr>
                               ))}
@@ -1719,6 +1972,7 @@ export default function App() {
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-zinc-50 p-6 rounded-3xl border border-zinc-100 shadow-inner">
                             <button
                               onClick={() => {
+                                if (!checkPermission("canModifyTresorerie")) return;
                                 setIncomeForm({
                                   amount: "",
                                   source: "",
@@ -1729,7 +1983,7 @@ export default function App() {
                                 });
                                 setShowAddIncomeModal(true);
                               }}
-                              className="group p-8 bg-white hover:bg-zinc-950 hover:text-white rounded-2xl border border-zinc-150 transition-all duration-300 flex items-center justify-between text-left shadow-sm hover:shadow-lg"
+                              className={`group p-8 rounded-2xl border transition-all duration-300 flex items-center justify-between text-left shadow-sm ${checkPermission("canModifyTresorerie") ? "bg-white border-zinc-150 hover:bg-zinc-950 hover:text-white hover:shadow-lg cursor-pointer" : "bg-zinc-100/50 border-zinc-100 opacity-60 cursor-not-allowed"}`}
                             >
                               <div className="space-y-1.5 text-left">
                                 <div className="p-3.5 bg-emerald-50 group-hover:bg-emerald-500/10 text-emerald-600 rounded-2xl inline-block mb-3 transition-colors">
@@ -1743,6 +1997,7 @@ export default function App() {
 
                             <button
                               onClick={() => {
+                                if (!checkPermission("canModifyTresorerie")) return;
                                 setExpenseForm({
                                   amount: "",
                                   description: "",
@@ -1754,7 +2009,7 @@ export default function App() {
                                 });
                                 setShowAddExpenseModal(true);
                               }}
-                              className="group p-8 bg-white hover:bg-zinc-950 hover:text-white rounded-2xl border border-zinc-150 transition-all duration-300 flex items-center justify-between text-left shadow-sm hover:shadow-lg"
+                              className={`group p-8 rounded-2xl border transition-all duration-300 flex items-center justify-between text-left shadow-sm ${checkPermission("canModifyTresorerie") ? "bg-white border-zinc-150 hover:bg-zinc-950 hover:text-white hover:shadow-lg cursor-pointer" : "bg-zinc-100/50 border-zinc-100 opacity-60 cursor-not-allowed"}`}
                             >
                               <div className="space-y-1.5 text-left">
                                 <div className="p-3.5 bg-rose-50 group-hover:bg-rose-500/10 text-rose-600 rounded-2xl inline-block mb-3 transition-colors">
@@ -1839,12 +2094,14 @@ export default function App() {
                                           >
                                             <Star size={14} className={t.favorite ? "fill-yellow-400 text-yellow-400" : ""} />
                                           </button>
-                                          <button 
-                                            onClick={() => handleDeleteItem("financeTransactions", t.id)}
-                                            className="p-1.5 text-zinc-400 hover:text-red-500 rounded hover:bg-red-50"
-                                          >
-                                            <Trash2 size={14} />
-                                          </button>
+                                          {checkPermission("canModifyTresorerie") && (
+                                            <button 
+                                              onClick={() => handleDeleteItem("financeTransactions", t.id)}
+                                              className="p-1.5 text-zinc-400 hover:text-red-500 rounded hover:bg-red-50 cursor-pointer"
+                                            >
+                                              <Trash2 size={14} />
+                                            </button>
+                                          )}
                                         </div>
                                       </div>
                                     </div>
@@ -1996,9 +2253,10 @@ export default function App() {
                                   <textarea
                                     value={internalNotes}
                                     onChange={(e) => handleUpdateInternalNotes(e.target.value)}
-                                    placeholder="Ajouter des annotations ou mémos comptables ici..."
+                                    placeholder={checkPermission("canModifyTresorerie") ? "Ajouter des annotations ou mémos comptables ici..." : "Mode lecture seule actif pour le bloc-notes."}
+                                    disabled={!checkPermission("canModifyTresorerie")}
                                     rows={4}
-                                    className="w-full bg-zinc-50 border border-zinc-100 rounded-2xl p-4 text-xs font-serif leading-relaxed outline-none focus:border-primary focus:bg-white transition-all resize-none"
+                                    className={`w-full bg-zinc-50 border border-zinc-100 rounded-2xl p-4 text-xs font-serif leading-relaxed outline-none transition-all resize-none ${checkPermission("canModifyTresorerie") ? "focus:border-primary focus:bg-white" : "cursor-not-allowed opacity-70"}`}
                                   />
                                 </div>
                               </div>
@@ -2528,7 +2786,7 @@ export default function App() {
                   </div>
                 )}
 
-                {activeTab === "agenda" && user && (
+                {activeTab === "agenda" && checkPermission("canViewAgenda") && (
                   <div className="space-y-12 animate-fade-in pb-16">
                     {/* Header */}
                     <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-2 border-b border-zinc-100">
@@ -2724,8 +2982,9 @@ export default function App() {
                             <textarea
                               value={newNoteText}
                               onChange={(e) => setNewNoteText(e.target.value)}
-                              placeholder="Écrivez une note de post-it ici..."
-                              className="w-full h-24 p-3.5 text-xs text-zinc-800 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none focus:border-primary focus:bg-white transition-all resize-none font-sans"
+                              placeholder={checkPermission("canModifyAgenda") ? "Écrivez une note de post-it ici..." : "Mode lecture seule actif pour la création."}
+                              disabled={!checkPermission("canModifyAgenda")}
+                              className={`w-full h-24 p-3.5 text-xs text-zinc-800 bg-zinc-50 border border-zinc-100 rounded-2xl outline-none transition-all resize-none font-sans ${checkPermission("canModifyAgenda") ? "focus:border-primary focus:bg-white" : "cursor-not-allowed opacity-75"}`}
                             />
                             
                             {/* Color Selector */}
@@ -3132,6 +3391,579 @@ export default function App() {
                             </div>
                           )}
 
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                )}
+
+                {activeTab === "accounts" && checkPermission("canViewAccounts") && (
+                  <div className="space-y-12 animate-fade-in pb-16 font-sans">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-2 border-b border-zinc-100">
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-[0.4em] text-primary block mb-2 font-mono">HABILITATIONS ET SÉCURITÉ DE L'ÉQUIPE // CRISTAL CLAIR</span>
+                        <h2 className="text-4xl md:text-5xl font-black tracking-tighter uppercase text-zinc-950">Gestion des Comptes</h2>
+                        <p className="text-zinc-500 text-sm mt-1">Visualisez et configurez les niveaux d'accès des membres du comité de soutien</p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-zinc-50 p-4 rounded-2xl border border-zinc-100 font-mono text-xs text-zinc-650">
+                        <div className="flex items-center gap-2">
+                          <Activity size={14} className="text-primary animate-pulse" />
+                          <span className="font-bold uppercase tracking-wider text-[10px] text-zinc-400">Rôles actifs :</span>
+                          <span className="text-zinc-800 font-bold">{systemUsers.length} comptes</span>
+                        </div>
+                      </div>
+                    </header>
+
+                    {/* Main Grid */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                      
+                      {/* Left Block: Teammates lists (8 cols) */}
+                      <div className="lg:col-span-8 bg-white border border-zinc-100 rounded-3xl p-6 shadow-sm space-y-6">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-zinc-50 pb-5">
+                          <div>
+                            <h4 className="text-xs font-black tracking-widest text-zinc-400 uppercase mb-1">Membres de l'Équipe</h4>
+                            <p className="text-xs text-zinc-500">Donnez l'accès aux différents modules de l'espace de travail</p>
+                          </div>
+                          
+                          {/* Search box */}
+                          <div className="relative w-full sm:w-64">
+                            <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                            <input
+                              type="text"
+                              placeholder="Rechercher par nom, email..."
+                              value={userProfileSearch}
+                              onChange={(e) => setUserProfileSearch(e.target.value)}
+                              className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-100 rounded-xl text-xs outline-none focus:border-primary focus:bg-white transition-all font-semibold"
+                            />
+                          </div>
+                        </div>
+
+                        {/* List rendering */}
+                        {(() => {
+                          const filteredUsers = systemUsers.filter(u => {
+                            const searchLower = userProfileSearch.toLowerCase().trim();
+                            if (!searchLower) return true;
+                            const nameMatch = (u.displayName || "").toLowerCase().includes(searchLower);
+                            const emailMatch = (u.email || "").toLowerCase().includes(searchLower);
+                            return nameMatch || emailMatch;
+                          });
+
+                          if (filteredUsers.length === 0) {
+                            return (
+                              <div className="p-12 border border-dashed border-zinc-200 rounded-3xl text-center text-zinc-400 py-16 space-y-2">
+                                <Users size={32} className="mx-auto text-zinc-300 mb-1" />
+                                <p className="text-sm font-bold uppercase tracking-wide">Aucun membre trouvé</p>
+                                <p className="text-xs">Modifiez vos critères de recherche ou invitez un collègue.</p>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div className="space-y-4">
+                              {filteredUsers.map((u) => {
+                                // Compute Name Initials
+                                const initials = (u.displayName || u.email || "M")
+                                  .split(" ")
+                                  .map((n: string) => n[0])
+                                  .slice(0, 2)
+                                  .join("")
+                                  .toUpperCase();
+
+                                // Construct permissions list for visual status pills
+                                const groupPerms = [
+                                  { label: "Acc", active: !!u.canModifyHome },
+                                  { label: "Prog", active: !!u.canModifyProgramme },
+                                  { label: "Conf", active: !!u.canModifyConferences },
+                                  { label: "Éq", active: !!u.canModifyEquipe },
+                                  { label: "Trés(L)", active: !!u.canViewTresorerie },
+                                  { label: "Trés(E)", active: !!u.canModifyTresorerie },
+                                  { label: "Sout(L)", active: !!u.canViewSoutiens },
+                                  { label: "Sout(E)", active: !!u.canModifySoutiens },
+                                  { label: "Agd(L)", active: !!u.canViewAgenda },
+                                  { label: "Agd(E)", active: !!u.canModifyAgenda },
+                                  { label: "Habil", active: !!u.canViewAccounts }
+                                ];
+
+                                const isSovereign = u.email === "admin@fgses.mun";
+
+                                return (
+                                  <div 
+                                    key={u.id}
+                                    className="p-5 border border-zinc-100 bg-zinc-50/20 rounded-2xl hover:bg-zinc-50/50 transition-all shadow-xs flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
+                                  >
+                                    {/* Identity */}
+                                    <div className="flex items-center gap-4">
+                                      <div className="w-12 h-12 rounded-full bg-zinc-950 text-white font-black text-sm flex items-center justify-center tracking-tighter shadow-sm">
+                                        {initials}
+                                      </div>
+                                      <div>
+                                        <div className="flex items-center gap-2">
+                                          <h4 className="text-sm font-bold text-zinc-950">{u.displayName || "Sans nom"}</h4>
+                                          <span className={`px-2 py-0.5 text-[8px] font-black uppercase tracking-wider rounded-md border ${
+                                            u.role === "admin" || isSovereign
+                                              ? "bg-primary/10 text-primary border-primary/20"
+                                              : "bg-zinc-105 text-zinc-505 border-zinc-200"
+                                          }`}>
+                                            {isSovereign ? "SOUVERAIN" : (u.role === "admin" ? "ADMIN" : "MEMBRE")}
+                                          </span>
+                                        </div>
+                                        <p className="text-xs text-zinc-500 mt-0.5">{u.email}</p>
+                                        <p className="text-[9px] text-zinc-400 font-mono uppercase tracking-wider mt-1.5">
+                                          Créé le : {u.createdAt ? (typeof u.createdAt.toDate === "function" ? u.createdAt.toDate().toLocaleDateString("fr-FR") : new Date(u.createdAt.seconds * 1000).toLocaleDateString("fr-FR")) : "Inconnu"}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    {/* Actions & Permissions */}
+                                    <div className="flex flex-col sm:flex-row md:flex-col lg:flex-row items-start sm:items-center md:items-end lg:items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+                                      <div className="flex flex-wrap gap-1 max-w-[280px] md:justify-end">
+                                        {isSovereign ? (
+                                          <span className="px-2 py-1 text-[8px] font-black tracking-widest uppercase rounded bg-zinc-955 text-amber-500 border border-amber-500/20 shadow-xs">
+                                            Rôle Souverain : TOUS LES ACCÈS SONT ACTIFS
+                                          </span>
+                                        ) : (
+                                          groupPerms.map((perm, pIdx) => (
+                                            <span 
+                                              key={pIdx}
+                                              className={`px-1.5 py-0.5 text-[8px] font-bold rounded uppercase tracking-wide border ${
+                                                perm.active 
+                                                  ? "bg-emerald-50 text-emerald-700 border-emerald-205" 
+                                                  : "bg-zinc-100/50 text-zinc-350 border-zinc-200/30"
+                                              }`}
+                                              title={perm.active ? `Habilitation active: ${perm.label}` : `Refusé: ${perm.label}`}
+                                            >
+                                              {perm.label}
+                                            </span>
+                                          ))
+                                        )}
+                                      </div>
+
+                                      <div className="flex items-center gap-2 self-end sm:self-auto">
+                                        <button
+                                          onClick={() => {
+                                            setSelectedUserForEdit(u);
+                                            setEditingPermissions({
+                                              canModifyHome: !!u.canModifyHome,
+                                              canModifyProgramme: !!u.canModifyProgramme,
+                                              canModifyConferences: !!u.canModifyConferences,
+                                              canModifyEquipe: !!u.canModifyEquipe,
+                                              canViewSoutiens: !!u.canViewSoutiens,
+                                              canModifySoutiens: !!u.canModifySoutiens,
+                                              canViewTresorerie: !!u.canViewTresorerie,
+                                              canModifyTresorerie: !!u.canModifyTresorerie,
+                                              canViewAgenda: !!u.canViewAgenda,
+                                              canModifyAgenda: !!u.canModifyAgenda,
+                                              canViewAccounts: !!u.canViewAccounts,
+                                              canModifyAccounts: !!u.canModifyAccounts,
+                                            });
+                                          }}
+                                          disabled={isSovereign || !checkPermission("canModifyAccounts")}
+                                          className="px-3 py-1.5 bg-white hover:bg-zinc-55 border border-zinc-200 text-zinc-700 hover:text-zinc-950 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all disabled:opacity-40 cursor-pointer"
+                                        >
+                                          Gérer
+                                        </button>
+                                        
+                                        <button
+                                          onClick={() => {
+                                            setUserToDelete(u);
+                                          }}
+                                          disabled={isSovereign || u.id === user?.uid || !checkPermission("canModifyAccounts")}
+                                          className="p-1.5 border border-zinc-200 hover:border-rose-200 text-zinc-400 hover:text-rose-600 bg-white hover:bg-rose-50 rounded-xl transition-all disabled:opacity-40 cursor-pointer"
+                                          title="Révoquer le compte"
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Right Block: Teammates creation form (4 cols) */}
+                      <div className="lg:col-span-4 space-y-6">
+                        <form onSubmit={handleCreateTeammateAccount} className="bg-white border border-zinc-100 rounded-3xl p-6 shadow-sm space-y-5">
+                          <div>
+                            <span className="text-[9px] font-black uppercase tracking-[0.2em] text-primary font-mono block">WORKSPACE // ADMIN</span>
+                            <h4 className="text-lg font-black text-zinc-950 tracking-tight flex items-center gap-1.5 mt-0.5">
+                              Créer un collaborateur
+                            </h4>
+                            <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
+                              Créez directement un compte pour les membres de l'équipe sans qu'ils aient besoin de s'inscrire eux-mêmes au préalable.
+                            </p>
+                          </div>
+
+                          {/* Message boxes */}
+                          {creationError && (
+                            <div className="bg-rose-50 border border-rose-100/50 p-3.5 rounded-xl flex items-start gap-2.5 text-rose-705 text-xs">
+                              <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                              <span>{creationError}</span>
+                            </div>
+                          )}
+
+                          {creationSuccess && (
+                            <div className="bg-emerald-50 border border-emerald-100/50 p-3.5 rounded-xl flex items-start gap-2.5 text-emerald-800 text-xs animate-fade-in">
+                              <CheckCircle2 size={15} className="shrink-0 mt-0.5" />
+                              <span>{creationSuccess}</span>
+                            </div>
+                          )}
+
+                          {/* Inputs */}
+                          <div className="space-y-4">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block pb-0.5">Nom d'affichage</label>
+                              <div className="relative">
+                                <UserIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                                <input
+                                  type="text"
+                                  required
+                                  value={newTeammateName}
+                                  onChange={(e) => setNewTeammateName(e.target.value)}
+                                  placeholder="Ex: Jean Dupont"
+                                  className="w-full pl-9 pr-4 py-2.5 bg-zinc-50 border border-zinc-100 rounded-xl text-xs outline-none focus:border-primary focus:bg-white transition-all font-semibold text-zinc-805"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block pb-0.5">Adresse e-mail</label>
+                              <div className="relative">
+                                <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                                <input
+                                  type="email"
+                                  required
+                                  value={newTeammateEmail}
+                                  onChange={(e) => setNewTeammateEmail(e.target.value)}
+                                  placeholder="Ex: j.dupont@fgses.mun"
+                                  className="w-full pl-9 pr-4 py-2.5 bg-zinc-50 border border-zinc-100 rounded-xl text-xs outline-none focus:border-primary focus:bg-white transition-all font-semibold text-zinc-805"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block pb-0.5">Mot de passe de départ</label>
+                              <div className="relative">
+                                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                                <input
+                                  type="text"
+                                  required
+                                  value={newTeammatePassword}
+                                  onChange={(e) => setNewTeammatePassword(e.target.value)}
+                                  placeholder="Saisissez un mot de passe (min 6 char)"
+                                  className="w-full pl-9 pr-4 py-2.5 bg-zinc-50 border border-zinc-100 rounded-xl text-xs outline-none focus:border-primary focus:bg-white transition-all font-mono font-semibold text-zinc-805"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block pb-0.5">Classification du Profil</label>
+                              <select
+                                value={newTeammateRole}
+                                onChange={(e) => setNewTeammateRole(e.target.value)}
+                                className="w-full p-2.5 bg-zinc-50 border border-zinc-100 rounded-xl outline-none focus:border-primary text-xs font-semibold text-zinc-805"
+                              >
+                                <option value="user">Membre Standard (Habilitations sélectives)</option>
+                                <option value="admin">Administrateur Système (Full-accès souverain)</option>
+                              </select>
+                            </div>
+
+                            {/* Permissions Selector Checkboxes */}
+                            <div className="space-y-2 pt-2 border-t border-zinc-105">
+                              <div className="flex justify-between items-center pb-0.5">
+                                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-450 block">Habilitations d'Accès</label>
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setNewTeammatePermissions({
+                                        canModifyHome: true,
+                                        canModifyProgramme: true,
+                                        canModifyConferences: true,
+                                        canModifyEquipe: true,
+                                        canViewSoutiens: true,
+                                        canModifySoutiens: true,
+                                        canViewTresorerie: true,
+                                        canModifyTresorerie: true,
+                                        canViewAgenda: true,
+                                        canModifyAgenda: true,
+                                        canViewAccounts: true,
+                                        canModifyAccounts: true,
+                                      });
+                                    }}
+                                    className="text-[9px] font-black uppercase tracking-wider text-emerald-600 hover:text-emerald-700 transition-colors cursor-pointer"
+                                  >
+                                    Tout cocher
+                                  </button>
+                                  <span className="text-zinc-300 text-[10px] font-semibold">|</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setNewTeammatePermissions({
+                                        canModifyHome: false,
+                                        canModifyProgramme: false,
+                                        canModifyConferences: false,
+                                        canModifyEquipe: false,
+                                        canViewSoutiens: false,
+                                        canModifySoutiens: false,
+                                        canViewTresorerie: false,
+                                        canModifyTresorerie: false,
+                                        canViewAgenda: false,
+                                        canModifyAgenda: false,
+                                        canViewAccounts: false,
+                                        canModifyAccounts: false,
+                                      });
+                                    }}
+                                    className="text-[9px] font-black uppercase tracking-wider text-rose-500 hover:text-rose-600 transition-colors cursor-pointer"
+                                  >
+                                    Tout décocher
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="bg-zinc-50/50 p-3 bg-zinc-50 border border-zinc-100 rounded-2xl grid grid-cols-1 gap-2.5 max-h-56 overflow-y-auto scrollbar-none">
+                                {[
+                                  { key: "canModifyHome", label: "Modifier Accueil [Home]" },
+                                  { key: "canModifyProgramme", label: "Modifier Programme [Contenu]" },
+                                  { key: "canModifyConferences", label: "Modifier Conférences [Médias]" },
+                                  { key: "canModifyEquipe", label: "Modifier Membres de l'Équipe" },
+                                  { key: "canViewSoutiens", label: "Lecture Liste des Soutiens" },
+                                  { key: "canModifySoutiens", label: "Édition/Gestion des Soutiens" },
+                                  { key: "canViewTresorerie", label: "Lecture Comptabilité/Trésor" },
+                                  { key: "canModifyTresorerie", label: "Édition/Gestion de la Trésor" },
+                                  { key: "canViewAgenda", label: "Lecture de l'Agenda / Notes" },
+                                  { key: "canModifyAgenda", label: "Édition/Gestion de l'Agenda" },
+                                  { key: "canViewAccounts", label: "Lecture des Habilitations" },
+                                  { key: "canModifyAccounts", label: "Édition/Gestion d'Accès" }
+                                ].map((permSec) => (
+                                  <label 
+                                    key={permSec.key}
+                                    className="flex items-center gap-2.5 cursor-pointer select-none group"
+                                  >
+                                    <input 
+                                      type="checkbox"
+                                      checked={!!(newTeammatePermissions as any)[permSec.key]}
+                                      onChange={(e) => {
+                                        setNewTeammatePermissions({
+                                          ...newTeammatePermissions,
+                                          [permSec.key]: e.target.checked
+                                        });
+                                      }}
+                                      className="rounded border-zinc-300 text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer"
+                                    />
+                                    <span className="text-[10px] font-bold text-zinc-650 group-hover:text-zinc-900 transition-colors">
+                                      {permSec.label}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="submit"
+                            disabled={isCreatingTeammate}
+                            className="w-full py-3 bg-primary text-white rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-opacity-95 shadow-sm hover:shadow transition-all border-none font-sans cursor-pointer flex items-center justify-center gap-2"
+                          >
+                            {isCreatingTeammate ? (
+                              <>
+                                <Loader2 size={12} className="animate-spin" />
+                                <span>Création en cours...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus size={14} />
+                                <span>Créer le compte</span>
+                              </>
+                            )}
+                          </button>
+                        </form>
+                      </div>
+
+                    </div>
+
+                    {/* Modal: Direct Permissions Modifier Panel */}
+                    {selectedUserForEdit && (
+                      <div className="fixed inset-0 bg-zinc-950/60 flex items-center justify-center z-[110] p-4 backdrop-blur-xs font-sans">
+                        <div className="w-full max-w-lg bg-white border border-zinc-100 rounded-3xl p-8 shadow-2xl relative animate-scale-up space-y-6 max-h-[90vh] overflow-y-auto scrollbar-none">
+                          <header className="border-b border-zinc-100 pb-4">
+                            <span className="text-[10px] font-black uppercase tracking-[0.25em] text-primary block mb-1">HABILITATIONS // MEMBRE</span>
+                            <h3 className="text-2xl font-black text-zinc-900">
+                              Modifier la fiche membre
+                            </h3>
+                            <p className="text-xs text-zinc-400 font-mono tracking-wide mt-1">
+                              Adresse e-mail : {selectedUserForEdit.email}
+                            </p>
+                          </header>
+
+                          <div className="space-y-5">
+                            {/* Display Name input */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block pb-1">Nom ou Identifiant d'affichage</label>
+                              <input
+                                type="text"
+                                value={selectedUserForEdit.displayName || ""}
+                                onChange={(e) => {
+                                  setSelectedUserForEdit({ ...selectedUserForEdit, displayName: e.target.value });
+                                }}
+                                className="w-full p-3 bg-zinc-50 border border-zinc-100 rounded-xl outline-none focus:border-primary text-xs font-semibold text-zinc-850"
+                                placeholder="..."
+                              />
+                            </div>
+
+                            {/* Role Select input */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block pb-1">Classification du Profil</label>
+                              <select
+                                value={selectedUserForEdit.role || "user"}
+                                onChange={(e) => {
+                                  setSelectedUserForEdit({ ...selectedUserForEdit, role: e.target.value });
+                                }}
+                                className="w-full p-3 bg-zinc-50 border border-zinc-100 rounded-xl outline-none focus:border-primary text-xs font-semibold text-zinc-850"
+                              >
+                                <option value="user">Membre Standard (Habilitations sélectives)</option>
+                                <option value="admin">Administrateur Système (Full-accès souverain)</option>
+                              </select>
+                            </div>
+
+                            {/* Permissions Checkboxes */}
+                            <div className="space-y-3 pt-1">
+                              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-400 block">Autorisations d'Accès de l'Espace de travail</label>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 bg-zinc-50 p-4 border border-zinc-100 rounded-2xl">
+                                {[
+                                  { key: "canModifyHome", label: "Modifier Accueil [Home]" },
+                                  { key: "canModifyProgramme", label: "Modifier Programme [Contenu]" },
+                                  { key: "canModifyConferences", label: "Modifier Conférences [Médias]" },
+                                  { key: "canModifyEquipe", label: "Modifier Membres de l'Équipe" },
+                                  { key: "canViewSoutiens", label: "Lecture Liste des Soutiens" },
+                                  { key: "canModifySoutiens", label: "Édition/Gestion des Soutiens" },
+                                  { key: "canViewTresorerie", label: "Lecture Comptabilité/Trésor" },
+                                  { key: "canModifyTresorerie", label: "Édition/Gestion de la Trésor" },
+                                  { key: "canViewAgenda", label: "Lecture de l'Agenda / Notes" },
+                                  { key: "canModifyAgenda", label: "Édition/Gestion de l'Agenda" },
+                                  { key: "canViewAccounts", label: "Lecture des Permissions" },
+                                  { key: "canModifyAccounts", label: "Édition/Gestion de d'Accès" }
+                                ].map((permSec) => (
+                                  <label 
+                                    key={permSec.key}
+                                    className="flex items-center gap-2.5 p-1 cursor-pointer select-none group"
+                                  >
+                                    <input 
+                                      type="checkbox"
+                                      checked={!!editingPermissions[permSec.key]}
+                                      onChange={(e) => {
+                                        setEditingPermissions({
+                                          ...editingPermissions,
+                                          [permSec.key]: e.target.checked
+                                        });
+                                      }}
+                                      className="rounded border-zinc-300 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                                    />
+                                    <span className="text-[11px] font-bold text-zinc-700 group-hover:text-zinc-955 transition-colors">
+                                      {permSec.label}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Control button actions */}
+                            <div className="flex gap-3 border-t border-zinc-100 pt-5">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedUserForEdit(null)}
+                                className="flex-1 py-4 text-zinc-400 font-bold uppercase text-[10px] tracking-widest hover:text-zinc-800 transition-colors bg-transparent border border-transparent font-sans cursor-pointer"
+                              >
+                                Annuler
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await handleUpdateTeammatePermissions(
+                                    selectedUserForEdit.id,
+                                    editingPermissions,
+                                    selectedUserForEdit.displayName,
+                                    selectedUserForEdit.role
+                                  );
+                                }}
+                                disabled={isUpdatingUserPermissions}
+                                className="flex-1 py-4 bg-primary text-white rounded-xl font-bold uppercase tracking-widest text-[10px] hover:bg-opacity-95 shadow-lg shadow-zinc-250 transition-all border-none font-sans cursor-pointer flex items-center justify-center gap-2"
+                              >
+                                {isUpdatingUserPermissions ? (
+                                  <>
+                                    <Loader2 size={12} className="animate-spin" />
+                                    <span>Mise à jour...</span>
+                                  </>
+                                ) : (
+                                  <span>Sauvegarder</span>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Modal: Direct Delete Confirmation Panel */}
+                    {userToDelete && (
+                      <div className="fixed inset-0 bg-zinc-950/60 flex items-center justify-center z-[110] p-4 backdrop-blur-xs font-sans">
+                        <div className="w-full max-w-md bg-white border border-zinc-100 rounded-3xl p-8 shadow-2xl relative animate-scale-up space-y-6">
+                          <header className="border-b border-zinc-100 pb-4 text-center">
+                            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-3">
+                              <Trash2 size={24} />
+                            </div>
+                            <span className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-600 block mb-1 font-mono">DANGER // RÉVOCATION</span>
+                            <h3 className="text-xl font-black text-zinc-900 uppercase tracking-tight">
+                              Supprimer le compte ?
+                            </h3>
+                            <p className="text-xs text-zinc-500 mt-2">
+                              Cette action supprimera la fiche d'accès et toutes les permissions de campagne associées à ce collaborateur.
+                            </p>
+                          </header>
+
+                          <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-100 text-center">
+                            <h4 className="text-sm font-bold text-zinc-950">{userToDelete.displayName || "Sans nom"}</h4>
+                            <p className="text-xs text-zinc-500 mt-0.5">{userToDelete.email}</p>
+                          </div>
+
+                          <div className="bg-rose-50/50 rounded-2xl p-4 border border-rose-100/30 flex items-start gap-3">
+                            <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                            <p className="text-[10px] text-rose-800 leading-relaxed font-semibold">
+                              L'utilisateur ne disposera plus d'aucun droit d'accès aux modules de gestion de l'espace de travail électoral.
+                            </p>
+                          </div>
+
+                          <div className="flex gap-3 border-t border-zinc-100 pt-5">
+                            <button
+                              type="button"
+                              onClick={() => setUserToDelete(null)}
+                              disabled={isDeletingTeammate}
+                              className="flex-1 py-3 text-zinc-450 hover:text-zinc-805 font-bold uppercase text-[10px] tracking-widest transition-colors bg-white hover:bg-zinc-50 border border-zinc-200 rounded-xl font-sans cursor-pointer disabled:opacity-55"
+                            >
+                              Annuler
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await handleDeleteTeammate(userToDelete.id);
+                              }}
+                              disabled={isDeletingTeammate}
+                              className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold uppercase tracking-widest text-[10px] hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all border-none font-sans cursor-pointer flex items-center justify-center gap-2"
+                            >
+                              {isDeletingTeammate ? (
+                                <>
+                                  <Loader2 size={12} className="animate-spin" />
+                                  <span>Suppression...</span>
+                                </>
+                              ) : (
+                                <span>Supprimer</span>
+                              )}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
